@@ -35,6 +35,15 @@ models/*.gguf
 models/*.ggml
 models/*.bin
 
+# Tauri model files (too large for git)
+src-tauri/models/**/*.gguf
+src-tauri/models/**/*.ggml
+src-tauri/models/**/*.bin
+src-tauri/models/**/*.onnx
+src-tauri/models/llm/
+src-tauri/models/embeddings/*.bin
+src-tauri/models/embeddings/*.onnx
+
 # Fastembed cache (created at runtime, should not be in source)
 src-tauri/models/fastembed/
 
