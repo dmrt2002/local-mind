@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalMind</title>
+    <!-- Apply theme immediately to prevent white flash -->
+    <script>
+      (function() {
+        try {
+          // Try to get theme from localStorage for instant application
+          const savedTheme = localStorage.getItem('theme');
+          if (savedTheme === 'dark' || savedTheme === 'light') {
+            document.documentElement.setAttribute('data-theme', savedTheme);
+          } else {
+            // Fallback to system preference
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+          }
+        } catch (e) {
+          // Fallback to system preference
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+        }
+      })();
+    </script>
+    <style>
+      /* Loading spinner styles */
+      .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background: var(--bg-primary, #ffffff);
+        transition: background 0.2s;
+      }
+
+      [data-theme="dark"] .loading-container {
+        background: #111827;
+      }
+
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid var(--spinner-bg, #e5e7eb);
+        border-top-color: var(--spinner-color, #3b82f6);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      [data-theme="dark"] .spinner {
+        border-color: #374151;
+        border-top-color: #60a5fa;
+      }
+
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+
+      .loading-text {
+        margin-top: 20px;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-secondary, #6b7280);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      }
+
+      [data-theme="dark"] .loading-text {
+        color: #9ca3af;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Root div MUST be here before any scripts -->
+    <div id="root">
+      <div class="loading-container">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading LocalMind</div>
+      </div>
+    </div>
+    <!-- Script runs AFTER root div exists -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

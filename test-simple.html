@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test</title>
+    <style>
+        body {
+            background: red !important;
+            color: white !important;
+            padding: 50px;
+            font-size: 32px;
+            margin: 0;
+        }
+        h1 {
+            background: yellow;
+            color: black;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 TEST PAGE LOADED!</h1>
+    <p>If you see this RED page, the window is loading HTML correctly.</p>
+    <p>Time: <span id="time"></span></p>
+    <script>
+        document.getElementById('time').textContent = new Date().toLocaleTimeString();
+        setInterval(() => {
+            document.getElementById('time').textContent = new Date().toLocaleTimeString();
+        }, 1000);
+        console.log("TEST PAGE: Script executed");
+    </script>
+</body>
+</html>
+

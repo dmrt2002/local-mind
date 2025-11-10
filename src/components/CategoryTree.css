@@ -1,0 +1,387 @@
+.category-tree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.tree-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-primary);
+  flex-shrink: 0;
+}
+
+.tree-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.deselect-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  transition: all 0.2s ease;
+}
+
+.deselect-button:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-secondary);
+  color: var(--text-secondary);
+}
+
+.deselect-button:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+}
+
+.tree-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.tree-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-primary);
+}
+
+.tree-loading,
+.tree-error,
+.tree-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.tree-loading {
+  gap: 12px;
+}
+
+.tree-error {
+  gap: 16px;
+  color: #ef4444;
+}
+
+.tree-empty {
+  gap: 8px;
+}
+
+.tree-empty small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.retry-button {
+  padding: 6px 12px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.retry-button:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-secondary);
+}
+
+/* Tree Node Styles */
+.tree-node {
+  user-select: none;
+}
+
+.tree-node-content {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.tree-node-content:hover {
+  background: var(--bg-hover);
+}
+
+.tree-node-content.selected {
+  background: #dbeafe;
+}
+
+[data-theme="dark"] .tree-node-content.selected {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.tree-node-content.selected:hover {
+  background: #bfdbfe;
+}
+
+[data-theme="dark"] .tree-node-content.selected:hover {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.expand-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.expand-button:hover {
+  color: var(--text-secondary);
+}
+
+.expand-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.expand-button:focus {
+  outline: none;
+}
+
+.category-button-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.category-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  min-width: 0;
+  transition: background 0.15s ease;
+}
+
+.category-button:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.category-button:focus {
+  outline: none;
+}
+
+.category-delete-button {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.tree-node-content:hover .category-delete-button {
+  display: flex;
+}
+
+.category-delete-button:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.category-delete-button:active {
+  transform: scale(0.9);
+}
+
+.category-delete-button:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
+}
+
+.category-emoji {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.category-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.category-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--border-primary);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.tree-node-content.selected .category-count {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+.tree-node-children {
+  /* Children are indented via inline paddingLeft */
+}
+
+.mini-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-primary);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Snippet Items */
+.snippet-item {
+  opacity: 0.9;
+}
+
+.snippet-item:hover {
+  opacity: 1;
+}
+
+.snippet-button {
+  padding: 3px 6px !important;
+}
+
+.snippet-name {
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  color: var(--text-tertiary) !important;
+  font-style: italic;
+}
+
+.snippet-item .category-emoji {
+  font-size: 14px;
+  opacity: 0.7;
+}
+
+/* Drag and Drop Styles - Mouse-based */
+.snippet-item {
+  cursor: grab;
+  user-select: none;
+}
+
+.snippet-item.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+/* Category button should receive all events including drops */
+.tree-node-content .category-button {
+  pointer-events: auto !important;
+}
+
+/* Child elements inside button don't intercept - let button handle them */
+.tree-node-content .category-button * {
+  pointer-events: none !important;
+}
+
+/* Expand button should also receive drops */
+.tree-node-content .expand-button {
+  pointer-events: auto !important;
+}
+
+.tree-node-content.drag-over {
+  background: rgba(59, 130, 246, 0.15) !important;
+  box-shadow: inset 3px 0 0 0 var(--accent-primary);
+}
+
+[data-theme="dark"] .tree-node-content.drag-over {
+  background: rgba(59, 130, 246, 0.25) !important;
+  box-shadow: inset 3px 0 0 0 var(--accent-primary);
+}
+
+/* Category Edit Mode Styles */
+.category-edit-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  padding: 4px 8px;
+}
+
+.edit-emoji-input {
+  width: 32px;
+  padding: 4px;
+  text-align: center;
+  font-size: 16px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.edit-name-input {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.edit-emoji-input:focus,
+.edit-name-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}

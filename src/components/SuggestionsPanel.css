@@ -1,0 +1,243 @@
+.suggestions-panel {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.suggestions-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.suggestions-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+.refresh-button {
+  padding: 6px 12px;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.refresh-button:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.suggestions-loading {
+  text-align: center;
+  padding: 20px;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.no-suggestions {
+  text-align: center;
+  padding: 30px 20px;
+}
+
+.no-suggestions-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.no-suggestions-text {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+/* Suggestion Cards */
+.suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggestion-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid;
+  border-radius: 6px;
+  padding: 12px;
+  transition: all 0.2s;
+}
+
+.suggestion-card:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.suggestion-card.priority-high {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+}
+
+.suggestion-card.priority-medium {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.suggestion-card.priority-low {
+  border-left-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.suggestion-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.suggestion-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestion-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 4px;
+}
+
+.suggestion-description {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.dismiss-button {
+  width: 24px;
+  height: 24px;
+  background: #e5e7eb;
+  color: #6b7280;
+  border: none;
+  border-radius: 4px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dismiss-button:hover {
+  background: #dc2626;
+  color: white;
+}
+
+.dismiss-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.show-more-button {
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.show-more-button:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+/* Dark Theme */
+[data-theme="dark"] .suggestions-panel {
+  background: #111827;
+  border-color: #374151;
+}
+
+[data-theme="dark"] .suggestions-header h3 {
+  color: #f9fafb;
+}
+
+[data-theme="dark"] .refresh-button {
+  background: #1f2937;
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+[data-theme="dark"] .refresh-button:hover {
+  background: #374151;
+  border-color: #6b7280;
+}
+
+[data-theme="dark"] .suggestions-loading {
+  color: #9ca3af;
+}
+
+[data-theme="dark"] .no-suggestions-text {
+  color: #9ca3af;
+}
+
+[data-theme="dark"] .suggestion-card {
+  background: #1f2937;
+  border-color: #374151;
+}
+
+[data-theme="dark"] .suggestion-card.priority-high {
+  background: #7f1d1d;
+  border-left-color: #f87171;
+}
+
+[data-theme="dark"] .suggestion-card.priority-medium {
+  background: #78350f;
+  border-left-color: #fbbf24;
+}
+
+[data-theme="dark"] .suggestion-card.priority-low {
+  background: #1e3a8a;
+  border-left-color: #60a5fa;
+}
+
+[data-theme="dark"] .suggestion-title {
+  color: #f9fafb;
+}
+
+[data-theme="dark"] .suggestion-description {
+  color: #d1d5db;
+}
+
+[data-theme="dark"] .dismiss-button {
+  background: #374151;
+  color: #9ca3af;
+}
+
+[data-theme="dark"] .dismiss-button:hover {
+  background: #dc2626;
+  color: white;
+}
+
+[data-theme="dark"] .show-more-button {
+  background: #1f2937;
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+[data-theme="dark"] .show-more-button:hover {
+  background: #374151;
+  border-color: #6b7280;
+}
