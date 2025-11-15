@@ -3,7 +3,7 @@ use log;
 use sqlx::{sqlite::SqlitePool, Row};
 
 /// Current database schema version
-const CURRENT_VERSION: i32 = 20;
+const CURRENT_VERSION: i32 = 21;
 
 /// Migration definitions
 #[derive(Debug)]
@@ -427,6 +427,15 @@ const MIGRATIONS: &[Migration] = &[
             -- Add command picker settings for terminal autocomplete feature
             ALTER TABLE settings ADD COLUMN command_picker_enabled BOOLEAN DEFAULT 1;
             ALTER TABLE settings ADD COLUMN command_picker_shortcut TEXT DEFAULT 'Ctrl+R';
+        "#,
+    },
+    Migration {
+        version: 21,
+        name: "add_spotlight_settings",
+        up: r#"
+            -- Add Spotlight search overlay settings
+            ALTER TABLE settings ADD COLUMN spotlight_enabled BOOLEAN DEFAULT 1;
+            ALTER TABLE settings ADD COLUMN spotlight_shortcut TEXT DEFAULT 'Ctrl+Space';
         "#,
     },
 ];

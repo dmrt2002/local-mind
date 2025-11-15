@@ -22,6 +22,9 @@ pub struct Settings {
     // Command picker settings
     pub command_picker_enabled: bool,
     pub command_picker_shortcut: String, // e.g., "Alt+C" or "Ctrl+R"
+    // Spotlight search settings
+    pub spotlight_enabled: bool,
+    pub spotlight_shortcut: String, // e.g., "Cmd+Space" or "Alt+Space"
     // Screenshot monitoring settings
     pub screenshot_monitoring_enabled: bool,
     pub screenshot_directory: String,
@@ -58,6 +61,17 @@ impl Default for Settings {
             shell_type: "zsh".to_string(),
             command_picker_enabled: true,
             command_picker_shortcut: "Ctrl+R".to_string(),
+            spotlight_enabled: true,
+            spotlight_shortcut: {
+                #[cfg(target_os = "macos")]
+                {
+                    "Ctrl+Space".to_string()
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    "Alt+Space".to_string()
+                }
+            },
             screenshot_monitoring_enabled: true,
             screenshot_directory: String::from(
                 std::env::var("HOME")
@@ -89,6 +103,8 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<Settings> {
                terminal_min_length, shell_type,
                COALESCE(command_picker_enabled, 1) as command_picker_enabled,
                COALESCE(command_picker_shortcut, 'Ctrl+R') as command_picker_shortcut,
+               COALESCE(spotlight_enabled, 1) as spotlight_enabled,
+               COALESCE(spotlight_shortcut, 'Ctrl+Space') as spotlight_shortcut,
                screenshot_monitoring_enabled, screenshot_directory,
                screenshot_ocr_enabled, screenshot_caption_enabled, visual_search_enabled,
                COALESCE(ocr_engine, 'auto') as ocr_engine,
@@ -124,15 +140,17 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<Settings> {
             shell_type: row.get(10),
             command_picker_enabled: row.get(11),
             command_picker_shortcut: row.get(12),
-            screenshot_monitoring_enabled: row.get(13),
-            screenshot_directory: row.get(14),
-            screenshot_ocr_enabled: row.get(15),
-            screenshot_caption_enabled: row.get(16),
-            visual_search_enabled: row.get(17),
-            ocr_engine: row.get(18),
-            ocr_recognition_level: row.get(19),
-            ocr_cleaning_level: row.get(20),
-            tesseract_psm_mode: row.get(21),
+            spotlight_enabled: row.get(13),
+            spotlight_shortcut: row.get(14),
+            screenshot_monitoring_enabled: row.get(15),
+            screenshot_directory: row.get(16),
+            screenshot_ocr_enabled: row.get(17),
+            screenshot_caption_enabled: row.get(18),
+            visual_search_enabled: row.get(19),
+            ocr_engine: row.get(20),
+            ocr_recognition_level: row.get(21),
+            ocr_cleaning_level: row.get(22),
+            tesseract_psm_mode: row.get(23),
         }
     } else {
         // No settings exist, create default
@@ -164,11 +182,12 @@ pub async fn save_settings(pool: &SqlitePool, settings: &Settings) -> Result<()>
             terminal_monitoring_enabled, terminal_blocklist, terminal_allowlist,
             terminal_min_length, shell_type,
             command_picker_enabled, command_picker_shortcut,
+            spotlight_enabled, spotlight_shortcut,
             screenshot_monitoring_enabled, screenshot_directory,
             screenshot_ocr_enabled, screenshot_caption_enabled, visual_search_enabled,
             ocr_engine, ocr_recognition_level, ocr_cleaning_level, tesseract_psm_mode
         )
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             theme = excluded.theme,
             enable_semantic_search = excluded.enable_semantic_search,
@@ -183,6 +202,8 @@ pub async fn save_settings(pool: &SqlitePool, settings: &Settings) -> Result<()>
             shell_type = excluded.shell_type,
             command_picker_enabled = excluded.command_picker_enabled,
             command_picker_shortcut = excluded.command_picker_shortcut,
+            spotlight_enabled = excluded.spotlight_enabled,
+            spotlight_shortcut = excluded.spotlight_shortcut,
             screenshot_monitoring_enabled = excluded.screenshot_monitoring_enabled,
             screenshot_directory = excluded.screenshot_directory,
             screenshot_ocr_enabled = excluded.screenshot_ocr_enabled,
@@ -207,6 +228,8 @@ pub async fn save_settings(pool: &SqlitePool, settings: &Settings) -> Result<()>
     .bind(&settings.shell_type)
     .bind(settings.command_picker_enabled)
     .bind(&settings.command_picker_shortcut)
+    .bind(settings.spotlight_enabled)
+    .bind(&settings.spotlight_shortcut)
     .bind(settings.screenshot_monitoring_enabled)
     .bind(&settings.screenshot_directory)
     .bind(settings.screenshot_ocr_enabled)

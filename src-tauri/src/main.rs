@@ -482,6 +482,86 @@ async fn main() {
             commands::get_uncategorized_screenshots,
         ])
         .setup(|app| {
+            // Create spotlight window programmatically with explicit URL to spotlight.html
+            // This ensures it loads the correct HTML file, not the default index.html
+            use tauri::WindowBuilder;
+            
+            info!("🔧 Creating spotlight window programmatically...");
+            info!("   Target URL: spotlight.html");
+
+            let spotlight_window = WindowBuilder::new(
+                app,
+                "spotlight",
+                tauri::WindowUrl::App("spotlight.html".into())  // CRITICAL: Explicit URL to spotlight.html
+            )
+            .title("LocalMind Spotlight")
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)  // Enable transparency for backdrop blur effect
+            .always_on_top(true)
+            .visible(false)  // Hidden initially
+            .fullscreen(false)
+            .inner_size(800.0, 600.0)  // DEBUG: Set initial size to prevent 0x0 window
+            .center()  // DEBUG: Center the window initially
+            .skip_taskbar(true)
+            .build()
+            .map_err(|e| {
+                error!("❌ Failed to create spotlight window: {}", e);
+                e
+            })?;
+
+            info!("✅ Spotlight window builder completed");
+
+            // Get monitor dimensions after window creation and resize to fullscreen
+            info!("🔧 Attempting to get monitor dimensions...");
+            if let Some(monitor) = spotlight_window.current_monitor().map_err(|e| {
+                error!("Failed to get current monitor: {}", e);
+                e
+            })? {
+                let monitor_size = monitor.size();
+                info!("   Monitor size: {}x{}", monitor_size.width, monitor_size.height);
+
+                spotlight_window.set_size(tauri::PhysicalSize {
+                    width: monitor_size.width,
+                    height: monitor_size.height,
+                }).map_err(|e| {
+                    error!("Failed to set spotlight window size: {}", e);
+                    e
+                })?;
+
+                // Set position to cover the entire monitor (top-left corner)
+                let monitor_position = monitor.position();
+                spotlight_window.set_position(tauri::PhysicalPosition {
+                    x: monitor_position.x,
+                    y: monitor_position.y,
+                }).map_err(|e| {
+                    error!("Failed to set spotlight window position: {}", e);
+                    e
+                })?;
+
+                info!("✅ Window resized to fullscreen: {}x{} at position ({}, {})",
+                      monitor_size.width, monitor_size.height, monitor_position.x, monitor_position.y);
+            } else {
+                warn!("⚠️  No monitor found - using default size (800x600)");
+            }
+
+            // Ensure the window captures click events (important for transparent windows on macOS)
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = spotlight_window.set_ignore_cursor_events(false) {
+                    error!("Failed to enable cursor events on spotlight window: {}", e);
+                } else {
+                    info!("✅ Cursor events enabled for spotlight window");
+                }
+            }
+
+            info!("✅ Spotlight window created successfully");
+            info!("   - Label: spotlight");
+            info!("   - URL: spotlight.html");
+            info!("   - Visible: {}", spotlight_window.is_visible().unwrap_or(false));
+            info!("   - Size: {:?}", spotlight_window.outer_size());
+            info!("   - Position: {:?}", spotlight_window.outer_position());
+
             // Register global shortcuts
             let app_handle = app.handle();
             if let Err(e) = shortcuts::register_shortcuts(&app_handle) {

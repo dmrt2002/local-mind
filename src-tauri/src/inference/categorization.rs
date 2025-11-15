@@ -1740,7 +1740,7 @@ Respond in JSON format:
     } else {
         // NON-COMMAND PROMPT: General content categorization
         format!(
-            r#"You are a categorization assistant. Given content, suggest a SHORT category name (2-4 words max) and appropriate emoji.
+        r#"You are a categorization assistant. Given content, suggest a SHORT category name (2-4 words max) and appropriate emoji.
 
 Content: "{}"
 
@@ -1756,7 +1756,7 @@ Rules:
 - Examples: "AI Tools", "Proposal Management", "Business Cases", "Technical Documentation"
 - Emoji should match the category theme
 - Be specific to the content's topic"#,
-            content.chars().take(500).collect::<String>()
+        content.chars().take(500).collect::<String>()
         )
     };
 

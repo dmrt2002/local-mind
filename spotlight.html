@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalMind Spotlight</title>
+    <style>
+      /* Reset styles for Spotlight - no app styles */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      }
+      
+      #root {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+      }
+    </style>
+    <script>
+      (function() {
+        try {
+          const savedTheme = localStorage.getItem('theme');
+          if (savedTheme === 'dark' || savedTheme === 'light') {
+            document.documentElement.setAttribute('data-theme', savedTheme);
+          } else {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+          }
+        } catch (e) {
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <div style="padding: 20px; color: white; text-align: center;">
+        <p>Loading Spotlight...</p>
+      </div>
+    </div>
+    <script>
+      // Verify script loading
+      console.log("[Spotlight HTML] Page loaded, waiting for module...");
+      
+      // Add error handler for script loading
+      window.addEventListener('error', function(e) {
+        console.error("[Spotlight HTML] Script error:", e);
+        const root = document.getElementById('root');
+        if (root && !root.querySelector('.spotlight-container')) {
+          root.innerHTML = `
+            <div style="padding: 50px; color: red; font-size: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 12px; margin: 50px; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 99999;">
+              <h1>Script Loading Error</h1>
+              <p>Failed to load spotlight module. Check console for details.</p>
+              <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px;">${e.message || 'Unknown error'}</pre>
+            </div>
+          `;
+        }
+      }, true);
+      
+      // Check if module loaded after a delay
+      setTimeout(function() {
+        const root = document.getElementById('root');
+        // Check if React has rendered (look for spotlight-container class)
+        if (root && !root.querySelector('.spotlight-container') && root.textContent?.includes('Loading Spotlight...')) {
+          console.warn("[Spotlight HTML] Root still shows loading message after 2 seconds - module may not have loaded");
+          root.innerHTML = `
+            <div style="padding: 50px; color: orange; font-size: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 12px; margin: 50px; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 99999;">
+              <h1>Module Not Loading</h1>
+              <p>The spotlight module has not loaded. Check the browser console for errors.</p>
+              <p>Make sure Vite dev server is running and the module path is correct.</p>
+            </div>
+          `;
+        }
+      }, 2000);
+    </script>
+    <script type="module" src="/src/spotlight.tsx"></script>
+  </body>
+</html>
+

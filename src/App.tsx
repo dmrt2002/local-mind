@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { listen } from "@tauri-apps/api/event";
 import SearchWindow from "./components/SearchWindow";
 import HomeView from "./components/HomeView";
 import AnalyticsView from "./components/AnalyticsView";
@@ -177,6 +178,26 @@ function App() {
       showToast("Failed to navigate to snippet", "error");
     }
   };
+
+  // Listen for navigate events from Spotlight window
+  useEffect(() => {
+    const setupListener = async () => {
+      try {
+        const unlisten = await listen<{ snippetId: number }>("navigate-to-snippet", (event) => {
+          logger.info("App: Received navigate-to-snippet event from Spotlight", { snippetId: event.payload.snippetId });
+          handleNavigateToSnippet(event.payload.snippetId);
+        });
+        
+        return () => {
+          unlisten();
+        };
+      } catch (err) {
+        logger.error("App: Failed to setup navigate-to-snippet listener", err);
+      }
+    };
+
+    setupListener();
+  }, []);
 
   return (
     <div className="app">

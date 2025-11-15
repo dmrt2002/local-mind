@@ -23,6 +23,9 @@ interface Settings {
   // Command picker
   command_picker_enabled: boolean;
   command_picker_shortcut: string;
+  // Spotlight search
+  spotlight_enabled: boolean;
+  spotlight_shortcut: string;
   // Screenshot monitoring
   screenshot_monitoring_enabled: boolean;
   screenshot_directory: string;
@@ -78,6 +81,8 @@ export default function SettingsWindow() {
     shell_type: "zsh",
     command_picker_enabled: true,
     command_picker_shortcut: "Alt+C",
+    spotlight_enabled: true,
+    spotlight_shortcut: "Ctrl+Space",
     screenshot_monitoring_enabled: false,
     screenshot_directory: "",
     screenshot_ocr_enabled: true,
@@ -599,6 +604,53 @@ export default function SettingsWindow() {
                     }
                     disabled={saving}
                     placeholder="Alt+C"
+                    className="shortcut-input"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Spotlight Search */}
+          <div className="setting-group">
+            <h3>Spotlight Search (System-Wide)</h3>
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Enable Spotlight Search</label>
+                <p>Quick search overlay accessible from anywhere (default: {formatShortcutDisplay("Ctrl+Space")} on macOS, Alt+Space on others)</p>
+              </div>
+              <div className="setting-control">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.spotlight_enabled}
+                    onChange={(e) =>
+                      handleToggle(
+                        "spotlight_enabled",
+                        e.target.checked
+                      )
+                    }
+                    disabled={saving}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            {settings.spotlight_enabled && (
+              <div className="setting-item">
+                <div className="setting-info">
+                  <label>Keyboard Shortcut</label>
+                  <p>Shortcut to open Spotlight search (e.g., {formatShortcutDisplay("Ctrl+Space")}, Alt+Space). Note: On macOS, Ctrl is the Control key.</p>
+                </div>
+                <div className="setting-control">
+                  <input
+                    type="text"
+                    value={settings.spotlight_shortcut}
+                    onChange={(e) =>
+                      handleTextChange("spotlight_shortcut", e.target.value)
+                    }
+                    disabled={saving}
+                    placeholder="Ctrl+Space"
                     className="shortcut-input"
                   />
                 </div>

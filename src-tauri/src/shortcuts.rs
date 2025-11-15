@@ -50,6 +50,25 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<()> {
     })?;
     info!("Registered search shortcut: {}", search_shortcut);
 
+    // Register spotlight shortcut (if enabled)
+    if settings.spotlight_enabled {
+        let spotlight_shortcut = settings.spotlight_shortcut.clone();
+        match manager.register(&spotlight_shortcut, {
+            let app = app.clone();
+            move || {
+                if let Err(e) = handle_spotlight_shortcut(app.clone()) {
+                    error!("Failed to handle spotlight shortcut: {}", e);
+                }
+            }
+        }) {
+            Ok(_) => info!("✅ Registered spotlight shortcut: {}", spotlight_shortcut),
+            Err(e) => {
+                error!("❌ Failed to register spotlight shortcut '{}': {}", spotlight_shortcut, e);
+                // Don't fail registration if spotlight shortcut fails
+            }
+        }
+    }
+
     info!("✅ Global shortcuts registered successfully");
     Ok(())
 }
@@ -184,6 +203,77 @@ fn handle_search_shortcut(app: AppHandle) -> Result<()> {
         window.show()?;
         window.set_focus()?;
         info!("Search window shown");
+    }
+
+    Ok(())
+}
+
+/// Handle Spotlight shortcut (Ctrl+Space on macOS, Alt+Space on others)
+fn handle_spotlight_shortcut(app: AppHandle) -> Result<()> {
+    info!("🔍 Spotlight shortcut pressed");
+    
+    // Get or create spotlight window
+    let spotlight_window = match app.get_window("spotlight") {
+        Some(window) => {
+            info!("✅ Spotlight window found (label: spotlight)");
+            window
+        }
+        None => {
+            error!("❌ Spotlight window not found - this should not happen!");
+            return Err(anyhow::anyhow!("Spotlight window not found"));
+        }
+    };
+
+    // CRITICAL: Explicitly hide main window if it's visible when spotlight opens
+    // This prevents the app window from appearing when spotlight shortcut is pressed
+    if let Some(main_window) = app.get_window("main") {
+        if let Ok(is_visible) = main_window.is_visible() {
+            if is_visible {
+                warn!("⚠️  Main window is visible when spotlight opened - hiding it");
+                if let Err(e) = main_window.hide() {
+                    error!("Failed to hide main window: {}", e);
+                } else {
+                    info!("✅ Main window hidden to prevent interference with spotlight");
+                }
+            } else {
+                info!("✅ Main window is already hidden");
+            }
+        }
+    }
+
+    if spotlight_window.is_visible()? {
+        // Hide spotlight window
+        spotlight_window.hide()?;
+        info!("✅ Spotlight window hidden");
+    } else {
+        // Show and focus spotlight window only
+        info!("📂 Showing spotlight window (should load spotlight.html)");
+
+        // DEBUG: Check window state before showing
+        info!("🔧 DEBUG - Window state BEFORE show:");
+        info!("   - Visible: {:?}", spotlight_window.is_visible());
+        info!("   - Outer size: {:?}", spotlight_window.outer_size());
+        info!("   - Position: {:?}", spotlight_window.outer_position());
+        info!("   - Is minimized: {:?}", spotlight_window.is_minimized());
+        info!("   - Is maximized: {:?}", spotlight_window.is_maximized());
+
+        spotlight_window.show()?;
+
+        // DEBUG: Check window state after showing
+        info!("🔧 DEBUG - Window state AFTER show:");
+        info!("   - Visible: {:?}", spotlight_window.is_visible());
+        info!("   - Focused: {:?}", spotlight_window.is_focused());
+
+        spotlight_window.set_focus()?;
+
+        // DEBUG: Check window state after focus
+        info!("🔧 DEBUG - Window state AFTER set_focus:");
+        info!("   - Focused: {:?}", spotlight_window.is_focused());
+
+        // Emit event to focus search input
+        spotlight_window.emit("spotlight-focus", ())?;
+        info!("✅ Spotlight window shown and focused");
+        info!("   Expected content: SpotlightSearch component (from spotlight.html)");
     }
 
     Ok(())

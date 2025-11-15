@@ -29,6 +29,9 @@ pub struct SearchResults {
 pub struct SearchResultJson {
     pub id: i64,
     pub content: String,
+    pub summary: Option<String>,
+    #[serde(rename = "type")]
+    pub content_type: Option<String>,
     pub created_at: String,
     pub source_app: Option<String>,
     pub rank: f64,
@@ -904,6 +907,8 @@ impl From<SearchResult> for SearchResultJson {
         Self {
             id: result.snippet.id,
             content: result.snippet.content,
+            summary: result.snippet.summary,
+            content_type: result.snippet.content_type,
             created_at: result.snippet.created_at.to_rfc3339(),
             source_app: result.snippet.source_app,
             rank: result.rank,
