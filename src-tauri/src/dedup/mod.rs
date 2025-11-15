@@ -34,6 +34,13 @@ pub fn calculate_content_hash(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Calculate SHA-256 hash of image file bytes
+pub fn calculate_image_hash(image_bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(image_bytes);
+    format!("{:x}", hasher.finalize())
+}
+
 /// Add content_hash column to snippets table if it doesn't exist
 pub async fn migrate_add_content_hash(pool: &SqlitePool) -> Result<()> {
     // Check if column exists
@@ -81,8 +88,9 @@ pub async fn update_all_hashes(pool: &SqlitePool) -> Result<usize> {
     // Ensure column exists
     migrate_add_content_hash(pool).await?;
 
-    let snippets: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, content FROM snippets WHERE content_hash IS NULL"
+    // Fetch all snippets without hashes, including type and working_directory
+    let snippets: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, content, type, working_directory FROM snippets WHERE content_hash IS NULL"
     )
     .fetch_all(pool)
     .await
@@ -90,8 +98,24 @@ pub async fn update_all_hashes(pool: &SqlitePool) -> Result<usize> {
 
     let count = snippets.len();
 
-    for (id, content) in snippets {
-        let hash = calculate_content_hash(&content);
+    for (id, content, snippet_type, working_directory) in snippets {
+        // Calculate hash based on snippet type
+        let hash = match snippet_type.as_deref() {
+            Some("command") => {
+                // For commands, hash content + working directory
+                let unique_content = format!("{}:{}", content, working_directory.unwrap_or_default());
+                calculate_content_hash(&unique_content)
+            }
+            Some("screenshot") => {
+                // Screenshots use image hash, skip here
+                continue;
+            }
+            _ => {
+                // For text and other types, hash just the content
+                calculate_content_hash(&content)
+            }
+        };
+
         sqlx::query("UPDATE snippets SET content_hash = ? WHERE id = ?")
             .bind(&hash)
             .bind(id)
@@ -100,6 +124,37 @@ pub async fn update_all_hashes(pool: &SqlitePool) -> Result<usize> {
     }
 
     log::info!("Updated hashes for {} snippets", count);
+    Ok(count)
+}
+
+/// Recalculate and fix ALL hashes (including existing ones) for commands
+/// This is needed to fix corrupted hashes from the old update_all_hashes function
+pub async fn recalculate_command_hashes(pool: &SqlitePool) -> Result<usize> {
+    log::info!("Recalculating command hashes to fix corrupted data...");
+
+    // Fetch all commands
+    let commands: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, content, working_directory FROM snippets WHERE type = 'command'"
+    )
+    .fetch_all(pool)
+    .await
+    .context("Failed to fetch commands")?;
+
+    let count = commands.len();
+
+    for (id, content, working_directory) in commands {
+        // Calculate correct hash: content + working_directory
+        let unique_content = format!("{}:{}", content, working_directory);
+        let hash = calculate_content_hash(&unique_content);
+
+        sqlx::query("UPDATE snippets SET content_hash = ? WHERE id = ?")
+            .bind(&hash)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+
+    log::info!("✅ Recalculated hashes for {} commands", count);
     Ok(count)
 }
 
@@ -121,6 +176,19 @@ pub async fn find_duplicate(pool: &SqlitePool, content: &str) -> Result<Option<D
         created_at,
         source_app,
     }))
+}
+
+/// Check if a screenshot with the same hash exists
+pub async fn find_duplicate_screenshot(pool: &SqlitePool, hash: &str) -> Result<Option<i64>> {
+    let result: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM snippets WHERE type = 'screenshot' AND content_hash = ? LIMIT 1"
+    )
+    .bind(hash)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to check for duplicate screenshot")?;
+
+    Ok(result)
 }
 
 /// Find all duplicate groups (snippets with same content hash)

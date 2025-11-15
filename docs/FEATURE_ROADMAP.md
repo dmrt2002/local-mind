@@ -1,8 +1,51 @@
 # LocalMind Feature Roadmap
 
-**Version:** 1.0
+**Version:** 1.1
 **Created:** November 2, 2025
+**Last Updated:** January 11, 2025
 **Status:** Active Development
+
+---
+
+## 🎉 Recent Releases
+
+### ✅ v1.1 - Monitoring & Context Expansion (Released January 2025)
+
+**Major Features Completed:**
+
+- ✅ **Terminal Command Monitoring** - Automatic capture of shell commands
+  - Multi-shell support (Zsh, Bash, Fish)
+  - Intelligent filtering (blocklist/allowlist/heuristics)
+  - Working directory and exit code tracking
+  - Searchable via keyword and semantic search
+
+- ✅ **Screenshot Monitoring** - Intelligent screenshot indexing
+  - Automatic detection and processing
+  - OCR text extraction (Tesseract)
+  - AI image captioning (Florence-2 integration)
+  - Browser metadata capture (URL + title)
+  - Grid layout with lightbox viewer
+
+- ✅ **Content Type System** - Unified interface for all content
+  - Three content types: Snippets, Commands, Screenshots
+  - Dedicated UI components for each type
+  - Filtering tabs (All/Snippets/Commands/Screenshots)
+  - Type-specific metadata and display
+
+- ✅ **Monitoring Settings** - Complete configuration UI
+  - Enable/disable monitoring per type
+  - OCR and captioning toggles
+  - Shell hook installation tools
+  - Directory configuration
+
+**Technical Achievements:**
+- Database migration v13 (13 new columns)
+- 9 new Tauri commands
+- 2,000+ lines of backend code
+- 1,500+ lines of frontend code
+- Full documentation suite
+
+**See:** [Monitoring Guide](features/MONITORING_GUIDE.md) for complete details.
 
 ---
 

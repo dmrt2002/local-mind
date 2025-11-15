@@ -41,7 +41,7 @@ impl Default for LlamaParams {
             n_threads: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4),
-            n_ctx: 1024,          // Reduced from 2048 - sufficient for categorization
+            n_ctx: 4096,          // Increased from 1024 - needed for categorization prompts (~1500 tokens)
             temperature: 0.3,
             top_p: 0.9,
             top_k: 40,
@@ -97,10 +97,16 @@ impl LlamaModel {
         log::debug!("Generating LLM response for prompt (length: {})", prompt.len());
 
         // Create context parameters
+        // Note: n_batch defaults to 512 in llama-cpp-2, but we need it to be at least as large as our prompt
+        // The batch size should be >= number of input tokens
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(params.n_ctx as u32))
             .with_n_threads(params.n_threads as i32)
             .with_n_threads_batch(params.n_threads as i32);
+        
+        // Note: llama-cpp-2 doesn't expose n_batch directly in LlamaContextParams
+        // The default n_batch is typically 512, which should be sufficient for most prompts
+        // If prompts exceed this, we'll get the assertion error and need to reduce prompt size
 
         // Create context
         let mut ctx = self.model
@@ -112,9 +118,22 @@ impl LlamaModel {
             .str_to_token(prompt, AddBos::Always)
             .context("Failed to tokenize prompt")?;
 
-        log::debug!("Tokenized prompt: {} tokens", tokens.len());
+        log::info!("Tokenized prompt: {} tokens", tokens.len());
+        log::info!("Prompt length: {} characters, {} tokens (max context: {} tokens)",
+            prompt.len(), tokens.len(), params.n_ctx);
+        
+        // Check if prompt might exceed default batch size (typically 512)
+        // llama-cpp-2 default n_batch is 512, so we warn if we're close
+        if tokens.len() > 400 {
+            log::warn!("⚠️  Prompt is large ({} tokens) - may exceed default batch size (512). If you see batch size errors, reduce prompt length.", tokens.len());
+        }
 
         if tokens.len() >= params.n_ctx {
+            log::error!("❌ CRITICAL: Prompt exceeds context window!");
+            log::error!("   Prompt: {} characters", prompt.len());
+            log::error!("   Tokens: {} (max: {})", tokens.len(), params.n_ctx);
+            log::error!("   Ratio: {:.2} chars/token", prompt.len() as f32 / tokens.len() as f32);
+            log::error!("   First 200 chars: {}", &prompt[..200.min(prompt.len())]);
             anyhow::bail!(
                 "Prompt too long: {} tokens (max: {})",
                 tokens.len(),

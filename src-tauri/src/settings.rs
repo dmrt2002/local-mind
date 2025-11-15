@@ -13,6 +13,23 @@ pub struct Settings {
     pub shortcut_save: String,
     pub shortcut_search: String,
     pub run_in_background: bool,
+    // Terminal monitoring settings
+    pub terminal_monitoring_enabled: bool,
+    pub terminal_blocklist: String,
+    pub terminal_allowlist: String,
+    pub terminal_min_length: i32,
+    pub shell_type: String,
+    // Screenshot monitoring settings
+    pub screenshot_monitoring_enabled: bool,
+    pub screenshot_directory: String,
+    pub screenshot_ocr_enabled: bool,
+    pub screenshot_caption_enabled: bool,
+    pub visual_search_enabled: bool,
+    // OCR engine settings
+    pub ocr_engine: String, // "auto", "apple_vision", "tesseract"
+    pub ocr_recognition_level: String, // "fast", "accurate" (for Apple Vision)
+    pub ocr_cleaning_level: String, // "minimal", "balanced", "aggressive"
+    pub tesseract_psm_mode: i32, // Page segmentation mode (3 = automatic)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,6 +48,25 @@ impl Default for Settings {
             shortcut_save: "Alt+Shift+C".to_string(),
             shortcut_search: "Alt+Shift+F".to_string(),
             run_in_background: true,
+            terminal_monitoring_enabled: false,
+            terminal_blocklist: "ls,cd,pwd,clear,exit,history,echo,cat,which,type".to_string(),
+            terminal_allowlist: "docker,git,kubectl,npm,cargo,python,ffmpeg,curl,aws,gcloud,az,terraform,ansible,ssh,scp,rsync".to_string(),
+            terminal_min_length: 60,
+            shell_type: "zsh".to_string(),
+            screenshot_monitoring_enabled: true,  // Enable by default to capture screenshots
+            screenshot_directory: String::from(
+                std::env::var("HOME")
+                    .map(|h| format!("{}/Desktop", h))
+                    .unwrap_or_else(|_| String::from("~/Desktop"))
+                    .as_str()
+            ),  // Default to Desktop for screenshots
+            screenshot_ocr_enabled: true,
+            screenshot_caption_enabled: true,
+            visual_search_enabled: false,
+            ocr_engine: "auto".to_string(),
+            ocr_recognition_level: "accurate".to_string(),
+            ocr_cleaning_level: "balanced".to_string(),
+            tesseract_psm_mode: 3, // Automatic segmentation
         }
     }
 }
@@ -43,7 +79,15 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<Settings> {
     let row = sqlx::query(
         r#"
         SELECT theme, enable_semantic_search, enable_search_analytics,
-               shortcut_save, shortcut_search, run_in_background
+               shortcut_save, shortcut_search, run_in_background,
+               terminal_monitoring_enabled, terminal_blocklist, terminal_allowlist,
+               terminal_min_length, shell_type,
+               screenshot_monitoring_enabled, screenshot_directory,
+               screenshot_ocr_enabled, screenshot_caption_enabled, visual_search_enabled,
+               COALESCE(ocr_engine, 'auto') as ocr_engine,
+               COALESCE(ocr_recognition_level, 'accurate') as ocr_recognition_level,
+               COALESCE(ocr_cleaning_level, 'balanced') as ocr_cleaning_level,
+               COALESCE(tesseract_psm_mode, 3) as tesseract_psm_mode
         FROM settings
         WHERE id = 1
         "#,
@@ -66,6 +110,20 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<Settings> {
             shortcut_save: row.get(3),
             shortcut_search: row.get(4),
             run_in_background: row.get(5),
+            terminal_monitoring_enabled: row.get(6),
+            terminal_blocklist: row.get(7),
+            terminal_allowlist: row.get(8),
+            terminal_min_length: row.get(9),
+            shell_type: row.get(10),
+            screenshot_monitoring_enabled: row.get(11),
+            screenshot_directory: row.get(12),
+            screenshot_ocr_enabled: row.get(13),
+            screenshot_caption_enabled: row.get(14),
+            visual_search_enabled: row.get(15),
+            ocr_engine: row.get(16),
+            ocr_recognition_level: row.get(17),
+            ocr_cleaning_level: row.get(18),
+            tesseract_psm_mode: row.get(19),
         }
     } else {
         // No settings exist, create default
@@ -91,16 +149,37 @@ pub async fn save_settings(pool: &SqlitePool, settings: &Settings) -> Result<()>
 
     sqlx::query(
         r#"
-        INSERT INTO settings (id, theme, enable_semantic_search, enable_search_analytics,
-                             shortcut_save, shortcut_search, run_in_background)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
+        INSERT INTO settings (
+            id, theme, enable_semantic_search, enable_search_analytics,
+            shortcut_save, shortcut_search, run_in_background,
+            terminal_monitoring_enabled, terminal_blocklist, terminal_allowlist,
+            terminal_min_length, shell_type,
+            screenshot_monitoring_enabled, screenshot_directory,
+            screenshot_ocr_enabled, screenshot_caption_enabled, visual_search_enabled,
+            ocr_engine, ocr_recognition_level, ocr_cleaning_level, tesseract_psm_mode
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             theme = excluded.theme,
             enable_semantic_search = excluded.enable_semantic_search,
             enable_search_analytics = excluded.enable_search_analytics,
             shortcut_save = excluded.shortcut_save,
             shortcut_search = excluded.shortcut_search,
-            run_in_background = excluded.run_in_background
+            run_in_background = excluded.run_in_background,
+            terminal_monitoring_enabled = excluded.terminal_monitoring_enabled,
+            terminal_blocklist = excluded.terminal_blocklist,
+            terminal_allowlist = excluded.terminal_allowlist,
+            terminal_min_length = excluded.terminal_min_length,
+            shell_type = excluded.shell_type,
+            screenshot_monitoring_enabled = excluded.screenshot_monitoring_enabled,
+            screenshot_directory = excluded.screenshot_directory,
+            screenshot_ocr_enabled = excluded.screenshot_ocr_enabled,
+            screenshot_caption_enabled = excluded.screenshot_caption_enabled,
+            visual_search_enabled = excluded.visual_search_enabled,
+            ocr_engine = excluded.ocr_engine,
+            ocr_recognition_level = excluded.ocr_recognition_level,
+            ocr_cleaning_level = excluded.ocr_cleaning_level,
+            tesseract_psm_mode = excluded.tesseract_psm_mode
         "#,
     )
     .bind(theme_str)
@@ -109,6 +188,20 @@ pub async fn save_settings(pool: &SqlitePool, settings: &Settings) -> Result<()>
     .bind(&settings.shortcut_save)
     .bind(&settings.shortcut_search)
     .bind(settings.run_in_background)
+    .bind(settings.terminal_monitoring_enabled)
+    .bind(&settings.terminal_blocklist)
+    .bind(&settings.terminal_allowlist)
+    .bind(settings.terminal_min_length)
+    .bind(&settings.shell_type)
+    .bind(settings.screenshot_monitoring_enabled)
+    .bind(&settings.screenshot_directory)
+    .bind(settings.screenshot_ocr_enabled)
+    .bind(settings.screenshot_caption_enabled)
+    .bind(settings.visual_search_enabled)
+    .bind(&settings.ocr_engine)
+    .bind(&settings.ocr_recognition_level)
+    .bind(&settings.ocr_cleaning_level)
+    .bind(settings.tesseract_psm_mode)
     .execute(pool)
     .await
     .context("Failed to save settings")?;

@@ -18,6 +18,14 @@ pub struct Snippet {
     pub updated_at: Option<DateTime<Utc>>,
     pub source_app: Option<String>,
     pub metadata: Option<String>,
+    // New fields for content types
+    #[serde(rename = "type")]
+    pub content_type: Option<String>, // 'text' | 'command' | 'screenshot'
+    pub file_path: Option<String>,
+    pub working_directory: Option<String>,
+    pub exit_code: Option<i32>,
+    pub website_url: Option<String>,
+    pub website_title: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -145,6 +153,53 @@ pub async fn get_pool() -> Result<SqlitePool> {
         .context("Database not initialized")
 }
 
+/// Generate summary with LLM fallback for text content
+async fn generate_summary_with_llm_fallback(content: &str) -> String {
+    // Try LLM summarization first for longer text content (if available)
+    if content.len() > 50 {
+        if let Some(llm_manager) = crate::inference::global_llm::get_global_llm() {
+            if llm_manager.model_exists() {
+                if let Ok(model) = llm_manager.get_model() {
+                    use crate::inference::summarization::ContentType;
+                    use crate::processing::text_processing::TextProcessor;
+                    
+                    // Detect if this looks like text content (not command/code)
+                    let processor = TextProcessor::new();
+                    let structure = processor.detect_structure(content);
+                    let content_type = match structure {
+                        crate::processing::text_processing::StructureType::Code => ContentType::Code,
+                        crate::processing::text_processing::StructureType::Terminal => ContentType::Terminal,
+                        _ => ContentType::General,
+                    };
+                    
+                    // Only use LLM for non-code, non-terminal content
+                    if matches!(content_type, ContentType::General) {
+                        let entities = processor.extract_entities(content);
+                        match crate::inference::summarization::summarize_with_llm(
+                            &model,
+                            content,
+                            None, // No caption for text content
+                            Some(&entities),
+                            content_type,
+                        ).await {
+                            Ok(result) => {
+                                log::debug!("✓ LLM summary generated: {}", result.summary);
+                                return result.summary;
+                            }
+                            Err(e) => {
+                                log::debug!("LLM summarization failed: {}, using rule-based fallback", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fall back to rule-based summary
+    generate_summary(content)
+}
+
 /// Generate a smart summary from content (first meaningful line, max 50 chars)
 pub fn generate_summary(content: &str) -> String {
     let trimmed = content.trim();
@@ -210,7 +265,6 @@ pub fn generate_summary(content: &str) -> String {
 
 /// Extract summary from build output
 fn extract_build_output_summary(content: &str) -> Option<String> {
-    let lines: Vec<&str> = content.lines().collect();
 
     // Check for compilation output
     if content.contains("Compiling") || content.contains("Building") {
@@ -245,7 +299,7 @@ fn extract_build_output_summary(content: &str) -> Option<String> {
 
 /// Extract summary from log messages (emoji-based)
 fn extract_log_message_summary(content: &str) -> Option<String> {
-    let first_lines: Vec<&str> = content.lines().take(5).collect();
+    let _first_lines: Vec<&str> = content.lines().take(5).collect();
 
     // Count different types of log emojis
     let processing_count = content.matches("🔄").count();
@@ -500,6 +554,145 @@ fn extract_intelligent_summary(content: &str) -> Option<String> {
         return Some(truncate_string(&format!("Note: {}", topic), 50));
     }
 
+    // Pattern: Marketing/product descriptions starting with action phrases
+    // Examples: "Win More Work", "Get Better Results", "Improve Your Workflow"
+    let first_word_lower = first_word.to_lowercase();
+    if matches!(first_word_lower.as_str(), "win" | "get" | "improve" | "boost" | "increase" | "maximize" | "enhance" | "achieve" | "unlock" | "discover") {
+        // Extract the key phrase (first 4-6 words that form a complete thought)
+        let key_phrase = words.iter().take(6).copied().collect::<Vec<_>>().join(" ");
+        return Some(truncate_string(&key_phrase, 50));
+    }
+
+    // Pattern: Product/platform descriptions starting with "As a" or "For [target audience]"
+    if cleaned.starts_with("as a ") || cleaned.starts_with("for ") {
+        // Extract the first sentence or first 8 words
+        let summary = words.iter().take(8).copied().collect::<Vec<_>>().join(" ");
+        return Some(truncate_string(&summary, 50));
+    }
+
+    // Pattern: Multi-line content with headline/title
+    // Look for content that has a title/headline followed by description
+    let lines: Vec<&str> = content.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    if lines.len() >= 2 {
+        // First line is likely a title/headline
+        let title = lines[0];
+        let title_words: Vec<&str> = title.split_whitespace().collect();
+        
+        // If title is short (2-8 words) and second line provides context, create summary
+        if title_words.len() >= 2 && title_words.len() <= 8 {
+            // Extract key topic from title and first sentence of description
+            let desc_first_sentence = lines[1]
+                .split(|c: char| c == '.' || c == '!' || c == '?')
+                .next()
+                .unwrap_or(lines[1])
+                .trim();
+            
+            // Create a descriptive summary combining title and key topic
+            let desc_words: Vec<&str> = desc_first_sentence.split_whitespace().take(8).collect();
+            if !desc_words.is_empty() {
+                let summary = format!("{}: {}", title, desc_words.join(" "));
+                return Some(truncate_string(&summary, 50));
+            }
+        }
+    }
+
+    // Pattern: Article/blog post style with title and subtitle
+    // Look for content starting with capitalized title followed by description
+    if lines.len() >= 1 {
+        let first_line = lines[0];
+        let first_line_words: Vec<&str> = first_line.split_whitespace().collect();
+        
+        // If first line looks like a title (mostly capitalized words, 3-10 words)
+        let cap_count = first_line_words.iter()
+            .filter(|w| w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+            .count();
+        
+        if first_line_words.len() >= 3 && first_line_words.len() <= 10 
+           && cap_count >= first_line_words.len() / 2 {
+            // This looks like a title - extract the main topic
+            // Look for key nouns (capitalized words that aren't common words)
+            let key_words: Vec<&str> = first_line_words.iter()
+                .filter(|w| {
+                    let w_lower = w.to_lowercase();
+                    !matches!(w_lower.as_str(), "a" | "an" | "the" | "and" | "or" | "but" | "of" | "in" | "on" | "at" | "to" | "for" | "with" | "from")
+                })
+                .take(4)
+                .copied()
+                .collect();
+            
+            if !key_words.is_empty() {
+                // Create a summary that describes what the content is about
+                let summary = if lines.len() > 1 {
+                    // Use title and extract topic from second line
+                    let topic = lines[1].split_whitespace()
+                        .filter(|w| w.len() > 3)
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !topic.is_empty() {
+                        format!("{} - {}", key_words.join(" "), topic)
+                    } else {
+                        key_words.join(" ")
+                    }
+                } else {
+                    key_words.join(" ")
+                };
+                return Some(truncate_string(&summary, 50));
+            }
+        }
+    }
+
+    // Pattern: Product names followed by descriptions (improved)
+    // Look for capitalized product names at the start, but create descriptive summary
+    if words.len() >= 2 {
+        let first_word = words[0];
+        let second_word = words[1];
+        
+        if first_word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) &&
+           (second_word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) || 
+            second_word.to_lowercase() == "ai" || second_word.to_lowercase() == "ai,") {
+            // Likely a product/company name - look for what it does
+            // Find the main verb or action word in the content
+            let action_words: Vec<&str> = words.iter()
+                .enumerate()
+                .filter(|(_, w)| {
+                    let w_lower = w.to_lowercase();
+                    matches!(w_lower.as_str(), "harnesses" | "uses" | "transforms" | "enables" | "provides" | "offers" | "helps" | "allows" | "improves" | "enhances" | "discovers")
+                })
+                .take(1)
+                .map(|(_, w)| *w)
+                .collect();
+            
+            if let Some(action) = action_words.first() {
+                // Extract what it does (next few words after action)
+                let action_pos = words.iter().position(|w| w == action).unwrap_or(0);
+                let topic_words: Vec<&str> = words.iter()
+                    .skip(action_pos + 1)
+                    .take(4)
+                    .copied()
+                    .collect();
+                
+                if !topic_words.is_empty() {
+                    let summary = format!("{} {} {}", first_word, action, topic_words.join(" "));
+                    return Some(truncate_string(&summary, 50));
+                }
+            }
+            
+            // Fallback: just use product name with first meaningful phrase
+            let meaningful_words: Vec<&str> = words.iter()
+                .skip(2)
+                .filter(|w| w.len() > 2)
+                .take(4)
+                .copied()
+                .collect();
+            
+            if !meaningful_words.is_empty() {
+                let summary = format!("{} - {}", format!("{} {}", first_word, second_word), meaningful_words.join(" "));
+                return Some(truncate_string(&summary, 50));
+            }
+        }
+    }
+
     None
 }
 
@@ -512,8 +705,30 @@ pub async fn save_snippet(
     let pool = get_pool().await?;
     let now = Utc::now();
 
-    // Generate summary
-    let summary = generate_summary(&content);
+    // Calculate content hash
+    let content_hash = crate::dedup::calculate_content_hash(&content);
+
+    // Check for duplicate
+    if let Some(duplicate) = crate::dedup::find_duplicate(&pool, &content).await? {
+        log::info!("⏭️  Snippet already exists (ID: {}), skipping duplicate", duplicate.id);
+        log::info!("   Existing snippet created at: {}", duplicate.created_at);
+        return Ok(duplicate.id);
+    }
+
+    // Generate summary - try LLM first for text content, fall back to rule-based
+    let summary = generate_summary_with_llm_fallback(&content).await;
+
+    // Extract website_url and website_title from metadata if available
+    let website_url = metadata
+        .as_ref()
+        .and_then(|m| m.get("url"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let website_title = metadata
+        .as_ref()
+        .and_then(|m| m.get("title"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     // Convert metadata to JSON string
     let metadata_str = metadata.as_ref().map(|m| m.to_string());
@@ -522,6 +737,8 @@ pub async fn save_snippet(
     log::info!("💾 Saving snippet:");
     log::info!("   Length: {} characters", content.len());
     log::info!("   Source app: {:?}", source_app);
+    log::info!("   Website URL: {:?}", website_url);
+    log::info!("   Website Title: {:?}", website_title);
     log::info!("   Metadata: {:?}", metadata_str);
     log::info!(
         "   Preview (first 200 chars): {}",
@@ -532,10 +749,11 @@ pub async fn save_snippet(
         }
     );
 
-    let id = sqlx::query(
+    // Use INSERT OR IGNORE to handle race conditions
+    let result = sqlx::query(
         r#"
-        INSERT INTO snippets (content, summary, created_at, updated_at, source_app, metadata)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO snippets (content, summary, created_at, updated_at, source_app, metadata, content_hash, website_url, website_title)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&content)
@@ -544,10 +762,27 @@ pub async fn save_snippet(
     .bind(now.to_rfc3339())
     .bind(&source_app)
     .bind(&metadata_str)
+    .bind(&content_hash)
+    .bind(&website_url)
+    .bind(&website_title)
     .execute(&pool)
     .await
-    .context("Failed to insert snippet")?
-    .last_insert_rowid();
+    .context("Failed to insert snippet")?;
+
+    // Check if insert was ignored (duplicate detected)
+    let id = if result.rows_affected() == 0 {
+        // Duplicate detected - return existing ID (already fetched in dedup check)
+        if let Some(duplicate) = crate::dedup::find_duplicate(&pool, &content).await? {
+            log::info!("⏭️  Snippet duplicate detected (race condition), using existing ID: {}", duplicate.id);
+            duplicate.id
+        } else {
+            // This shouldn't happen, but handle gracefully
+            anyhow::bail!("Snippet duplicate detected but existing ID not found");
+        }
+    } else {
+        // Insert succeeded - get the ID
+        result.last_insert_rowid()
+    };
 
     // Verify it was saved correctly
     let saved_content: Option<String> =
@@ -583,7 +818,8 @@ pub async fn get_snippet(id: i64) -> Result<Option<Snippet>> {
 
     let row = sqlx::query(
         r#"
-        SELECT id, content, summary, created_at, updated_at, source_app, metadata
+        SELECT id, content, summary, created_at, updated_at, source_app, metadata,
+               type, file_path, working_directory, exit_code, website_url, website_title
         FROM snippets
         WHERE id = ?
         "#,
@@ -626,6 +862,12 @@ pub async fn get_snippet(id: i64) -> Result<Option<Snippet>> {
             updated_at,
             source_app: row.get(5),
             metadata: row.get(6),
+            content_type: row.get(7),
+            file_path: row.get(8),
+            working_directory: row.get(9),
+            exit_code: row.get(10),
+            website_url: row.get(11),
+            website_title: row.get(12),
         }))
     } else {
         Ok(None)
@@ -728,7 +970,8 @@ pub async fn get_snippets_by_ids(ids: &[i64]) -> Result<Vec<Snippet>> {
 
     let query = format!(
         r#"
-        SELECT id, content, summary, created_at, updated_at, source_app, metadata
+        SELECT id, content, summary, created_at, updated_at, source_app, metadata,
+               type, file_path, working_directory, exit_code, website_url, website_title
         FROM snippets
         WHERE id IN ({})
         ORDER BY created_at DESC
@@ -780,6 +1023,12 @@ pub async fn get_snippets_by_ids(ids: &[i64]) -> Result<Vec<Snippet>> {
             updated_at,
             source_app: row.get(5),
             metadata: row.get(6),
+            content_type: row.get(7),
+            file_path: row.get(8),
+            working_directory: row.get(9),
+            exit_code: row.get(10),
+            website_url: row.get(11),
+            website_title: row.get(12),
         });
     }
 
@@ -1013,6 +1262,12 @@ pub async fn search_fts5_with_original(
                 updated_at,
                 source_app: row.get(5),
                 metadata: row.get(6),
+                content_type: Some("text".to_string()),
+                file_path: None,
+                working_directory: None,
+                exit_code: None,
+                website_url: None,
+                website_title: None,
             },
             rank: final_rank,
             match_type: MatchType::Keyword,
@@ -1064,7 +1319,8 @@ pub async fn create_category(
     let pool = get_pool().await?;
     let now = Utc::now();
 
-    let id = sqlx::query(
+    // Try to insert the category
+    let result = sqlx::query(
         r#"
         INSERT INTO categories (name, parent_id, emoji, created_at, is_app_folder, app_name)
         VALUES (?, ?, ?, ?, 0, NULL)
@@ -1075,18 +1331,66 @@ pub async fn create_category(
     .bind(emoji.unwrap_or_else(|| "📁".to_string()))
     .bind(now.to_rfc3339())
     .execute(&pool)
-    .await
-    .context("Failed to insert category")?
-    .last_insert_rowid();
+    .await;
 
-    log::info!("✅ Created category '{}' with ID: {}", name, id);
-    Ok(id)
+    match result {
+        Ok(result) => {
+            let id = result.last_insert_rowid();
+            log::info!("✅ Created category '{}' with ID: {}", name, id);
+            Ok(id)
+        }
+        Err(sqlx::Error::Database(db_err)) if db_err.message().contains("UNIQUE constraint") => {
+            // Category already exists - return the existing category ID
+            log::info!("Category '{}' already exists (unique constraint), fetching existing ID", name);
+            let existing_id: Option<i64> = if let Some(pid) = parent_id {
+                sqlx::query_scalar(
+                    r#"
+                    SELECT id FROM categories WHERE name = ? AND parent_id = ?
+                    "#,
+                )
+                .bind(&name)
+                .bind(pid)
+                .fetch_optional(&pool)
+                .await
+            } else {
+                sqlx::query_scalar(
+                    r#"
+                    SELECT id FROM categories WHERE name = ? AND parent_id IS NULL
+                    "#,
+                )
+                .bind(&name)
+                .fetch_optional(&pool)
+                .await
+            }
+            .context("Failed to query existing category")?;
+
+            match existing_id {
+                Some(id) => {
+                    log::info!("✅ Using existing category '{}' with ID: {}", name, id);
+                    Ok(id)
+                }
+                None => {
+                    // This shouldn't happen, but handle it gracefully
+                    anyhow::bail!("Category '{}' violates unique constraint but not found in database", name)
+                }
+            }
+        }
+        Err(e) => {
+            Err(e).context("Failed to insert category")
+        }
+    }
 }
 
 /// Get or create an app folder for the given source app
 /// Returns the folder ID
 pub async fn get_or_create_app_folder(source_app: &str) -> Result<i64> {
     let pool = get_pool().await?;
+
+    // Validate source_app is not empty
+    let trimmed_app = source_app.trim();
+    if trimmed_app.is_empty() {
+        anyhow::bail!("Cannot create app folder with empty source_app name");
+    }
 
     // Try to find existing app folder
     let existing: Option<(i64,)> = sqlx::query_as(
@@ -1096,7 +1400,7 @@ pub async fn get_or_create_app_folder(source_app: &str) -> Result<i64> {
         WHERE is_app_folder = 1 AND app_name = ?
         "#,
     )
-    .bind(source_app)
+    .bind(trimmed_app)
     .fetch_optional(&pool)
     .await
     .context("Failed to query app folder")?;
@@ -1106,7 +1410,7 @@ pub async fn get_or_create_app_folder(source_app: &str) -> Result<i64> {
     }
 
     // Create new app folder
-    let emoji = match source_app {
+    let emoji = match trimmed_app {
         "Cursor" => "⌨️",
         "LocalMind" => "🧠",
         "Chrome" | "Safari" | "Firefox" => "🌐",
@@ -1123,16 +1427,16 @@ pub async fn get_or_create_app_folder(source_app: &str) -> Result<i64> {
         VALUES (?, NULL, ?, ?, 1, ?)
         "#,
     )
-    .bind(source_app)
+    .bind(trimmed_app)
     .bind(emoji)
     .bind(now.to_rfc3339())
-    .bind(source_app)
+    .bind(trimmed_app)
     .execute(&pool)
     .await
     .context("Failed to create app folder")?
     .last_insert_rowid();
 
-    log::info!("✅ Created app folder '{}' with ID: {}", source_app, id);
+    log::info!("✅ Created app folder '{}' with ID: {}", trimmed_app, id);
     Ok(id)
 }
 
@@ -1182,47 +1486,102 @@ pub async fn get_category(id: i64) -> Result<Option<Category>> {
 /// Get all categories, optionally filtered by parent_id
 /// If parent_id is None, returns root categories (parent_id IS NULL)
 /// If parent_id is Some(id), returns children of that category
-pub async fn get_categories(parent_id: Option<Option<i64>>) -> Result<Vec<Category>> {
+pub async fn get_categories(parent_id: Option<Option<i64>>, content_type: Option<String>) -> Result<Vec<Category>> {
     let pool = get_pool().await?;
 
     let rows = if let Some(parent) = parent_id {
         // Filter by specific parent (including NULL for root categories)
         if let Some(parent_val) = parent {
+            if let Some(ref filter_type) = content_type {
+                // Filter by parent AND content type
+                sqlx::query(
+                    r#"
+                    SELECT DISTINCT c.id, c.name, c.parent_id, c.emoji, c.created_at
+                    FROM categories c
+                    INNER JOIN snippet_categories sc ON c.id = sc.category_id
+                    INNER JOIN snippets s ON sc.snippet_id = s.id
+                    WHERE c.parent_id = ? AND s.type = ?
+                    ORDER BY c.name ASC
+                    "#,
+                )
+                .bind(parent_val)
+                .bind(filter_type)
+                .fetch_all(&pool)
+                .await?
+            } else {
+                // Filter by parent only
+                sqlx::query(
+                    r#"
+                    SELECT id, name, parent_id, emoji, created_at
+                    FROM categories
+                    WHERE parent_id = ?
+                    ORDER BY name ASC
+                    "#,
+                )
+                .bind(parent_val)
+                .fetch_all(&pool)
+                .await?
+            }
+        } else {
+            // Get root categories (parent_id IS NULL)
+            if let Some(ref filter_type) = content_type {
+                // Filter root categories by content type
+                sqlx::query(
+                    r#"
+                    SELECT DISTINCT c.id, c.name, c.parent_id, c.emoji, c.created_at
+                    FROM categories c
+                    INNER JOIN snippet_categories sc ON c.id = sc.category_id
+                    INNER JOIN snippets s ON sc.snippet_id = s.id
+                    WHERE c.parent_id IS NULL AND s.type = ?
+                    ORDER BY c.name ASC
+                    "#,
+                )
+                .bind(filter_type)
+                .fetch_all(&pool)
+                .await?
+            } else {
+                // Get all root categories
+                sqlx::query(
+                    r#"
+                    SELECT id, name, parent_id, emoji, created_at
+                    FROM categories
+                    WHERE parent_id IS NULL
+                    ORDER BY name ASC
+                    "#,
+                )
+                .fetch_all(&pool)
+                .await?
+            }
+        }
+    } else {
+        // Get all categories
+        if let Some(ref filter_type) = content_type {
+            // Filter all categories by content type
             sqlx::query(
                 r#"
-                SELECT id, name, parent_id, emoji, created_at
-                FROM categories
-                WHERE parent_id = ?
-                ORDER BY name ASC
+                SELECT DISTINCT c.id, c.name, c.parent_id, c.emoji, c.created_at
+                FROM categories c
+                INNER JOIN snippet_categories sc ON c.id = sc.category_id
+                INNER JOIN snippets s ON sc.snippet_id = s.id
+                WHERE s.type = ?
+                ORDER BY c.name ASC
                 "#,
             )
-            .bind(parent_val)
+            .bind(filter_type)
             .fetch_all(&pool)
             .await?
         } else {
-            // Get root categories (parent_id IS NULL)
+            // Get all categories without filtering
             sqlx::query(
                 r#"
                 SELECT id, name, parent_id, emoji, created_at
                 FROM categories
-                WHERE parent_id IS NULL
                 ORDER BY name ASC
                 "#,
             )
             .fetch_all(&pool)
             .await?
         }
-    } else {
-        // Get all categories
-        sqlx::query(
-            r#"
-            SELECT id, name, parent_id, emoji, created_at
-            FROM categories
-            ORDER BY name ASC
-            "#,
-        )
-        .fetch_all(&pool)
-        .await?
     };
 
     let mut categories = Vec::new();
@@ -1281,7 +1640,7 @@ pub async fn update_category(id: i64, name: Option<String>, emoji: Option<String
     Ok(())
 }
 
-/// Delete category (cascades to children and snippet assignments)
+/// Delete category and all its content (cascades to children, snippets, embeddings, and files)
 pub async fn delete_category(id: i64) -> Result<()> {
     let pool = get_pool().await?;
 
@@ -1310,7 +1669,57 @@ pub async fn delete_category(id: i64) -> Result<()> {
 
     log::info!("Deleting category {} and {} descendants", id, to_delete.len() - 1);
 
-    // Delete all snippet assignments for all these categories
+    // Get all snippet IDs in these categories
+    let mut snippet_ids: Vec<i64> = Vec::new();
+    for cat_id in &to_delete {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT snippet_id FROM snippet_categories WHERE category_id = ?"
+        )
+        .bind(cat_id)
+        .fetch_all(&pool)
+        .await
+        .context("Failed to fetch snippet IDs")?;
+        snippet_ids.extend(ids);
+    }
+
+    // Deduplicate snippet IDs
+    snippet_ids.sort_unstable();
+    snippet_ids.dedup();
+
+    log::info!("Found {} snippets to delete", snippet_ids.len());
+
+    // Delete screenshot files from filesystem
+    for snippet_id in &snippet_ids {
+        if let Ok(Some(snippet)) = get_snippet(*snippet_id).await {
+            if snippet.content_type.as_deref() == Some("screenshot") {
+                if let Some(file_path) = snippet.file_path {
+                    if let Err(e) = tokio::fs::remove_file(&file_path).await {
+                        log::warn!("Failed to delete screenshot file {}: {}", file_path, e);
+                    } else {
+                        log::debug!("Deleted screenshot file: {}", file_path);
+                    }
+                }
+            }
+        }
+    }
+
+    // Delete embeddings from vector store
+    for snippet_id in &snippet_ids {
+        if let Err(e) = crate::db::lancedb::delete_embedding(*snippet_id).await {
+            log::warn!("Failed to delete embedding for snippet {}: {}", snippet_id, e);
+        }
+    }
+
+    // Delete snippets (FTS will be auto-cleaned by trigger)
+    for snippet_id in &snippet_ids {
+        sqlx::query("DELETE FROM snippets WHERE id = ?")
+            .bind(snippet_id)
+            .execute(&pool)
+            .await
+            .context("Failed to delete snippet")?;
+    }
+
+    // Delete snippet category assignments
     for cat_id in &to_delete {
         sqlx::query("DELETE FROM snippet_categories WHERE category_id = ?")
             .bind(cat_id)
@@ -1329,7 +1738,78 @@ pub async fn delete_category(id: i64) -> Result<()> {
             .context("Failed to delete category")?;
     }
 
-    log::info!("✅ Deleted category ID: {} and all descendants", id);
+    log::info!("✅ Deleted category ID: {}, {} descendants, and {} snippets", id, to_delete.len() - 1, snippet_ids.len());
+    Ok(())
+}
+
+/// Delete all data (snippets, commands, screenshots, categories, embeddings)
+pub async fn delete_all_data() -> Result<()> {
+    let pool = get_pool().await?;
+
+    log::info!("🗑️  Starting complete data deletion...");
+
+    // Get all snippet IDs first
+    let snippet_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM snippets")
+        .fetch_all(&pool)
+        .await
+        .context("Failed to fetch snippet IDs")?;
+
+    log::info!("Found {} total snippets to delete", snippet_ids.len());
+
+    // Delete all screenshot files from filesystem
+    let screenshots: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, file_path FROM snippets WHERE type = 'screenshot' AND file_path IS NOT NULL"
+    )
+    .fetch_all(&pool)
+    .await
+    .context("Failed to fetch screenshot paths")?;
+
+    for (snippet_id, file_path) in screenshots {
+        if let Err(e) = tokio::fs::remove_file(&file_path).await {
+            log::warn!("Failed to delete screenshot file {} (snippet {}): {}", file_path, snippet_id, e);
+        } else {
+            log::debug!("Deleted screenshot file: {}", file_path);
+        }
+    }
+
+    // Delete all embeddings from vector store
+    for snippet_id in &snippet_ids {
+        if let Err(e) = crate::db::lancedb::delete_embedding(*snippet_id).await {
+            log::warn!("Failed to delete embedding for snippet {}: {}", snippet_id, e);
+        }
+    }
+
+    // Delete all snippets (this will cascade to snippet_categories and trigger FTS cleanup)
+    sqlx::query("DELETE FROM snippets")
+        .execute(&pool)
+        .await
+        .context("Failed to delete snippets")?;
+
+    // Delete all categories
+    sqlx::query("DELETE FROM categories")
+        .execute(&pool)
+        .await
+        .context("Failed to delete categories")?;
+
+    // Delete snippet_categories (should already be empty due to cascade, but just in case)
+    sqlx::query("DELETE FROM snippet_categories")
+        .execute(&pool)
+        .await
+        .context("Failed to delete snippet categories")?;
+
+    // Delete export history
+    sqlx::query("DELETE FROM export_history")
+        .execute(&pool)
+        .await
+        .context("Failed to delete export history")?;
+
+    // Delete snippet versions
+    sqlx::query("DELETE FROM snippet_versions")
+        .execute(&pool)
+        .await
+        .context("Failed to delete snippet versions")?;
+
+    log::info!("✅ Successfully deleted all data: {} snippets, all categories, and all files", snippet_ids.len());
     Ok(())
 }
 
@@ -1414,24 +1894,48 @@ pub async fn get_snippets_by_category(
     category_id: i64,
     limit: i64,
     offset: i64,
+    content_type: Option<String>,
 ) -> Result<Vec<Snippet>> {
     let pool = get_pool().await?;
 
-    let rows = sqlx::query(
-        r#"
-        SELECT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata
-        FROM snippets s
-        INNER JOIN snippet_categories sc ON s.id = sc.snippet_id
-        WHERE sc.category_id = ?
-        ORDER BY sc.assigned_at DESC
-        LIMIT ? OFFSET ?
-        "#,
-    )
-    .bind(category_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&pool)
-    .await?;
+    let rows = if let Some(ref filter_type) = content_type {
+        // Filter by content type if provided
+        sqlx::query(
+            r#"
+            SELECT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
+                   s.type, s.file_path, s.working_directory, s.exit_code, s.website_url, s.website_title
+            FROM snippets s
+            INNER JOIN snippet_categories sc ON s.id = sc.snippet_id
+            WHERE sc.category_id = ? AND s.type = ?
+            ORDER BY sc.assigned_at DESC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(category_id)
+        .bind(filter_type)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&pool)
+        .await?
+    } else {
+        // No filter - get all types
+        sqlx::query(
+            r#"
+            SELECT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
+                   s.type, s.file_path, s.working_directory, s.exit_code, s.website_url, s.website_title
+            FROM snippets s
+            INNER JOIN snippet_categories sc ON s.id = sc.snippet_id
+            WHERE sc.category_id = ?
+            ORDER BY sc.assigned_at DESC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(category_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&pool)
+        .await?
+    };
 
     // Pre-allocate with exact capacity for better performance
     let mut snippets = Vec::with_capacity(rows.len());
@@ -1450,6 +1954,12 @@ pub async fn get_snippets_by_category(
             updated_at,
             source_app: row.get(5),
             metadata: row.get(6),
+            content_type: row.get(7),
+            file_path: row.get(8),
+            working_directory: row.get(9),
+            exit_code: row.get(10),
+            website_url: row.get(11),
+            website_title: row.get(12),
         });
     }
 
@@ -1498,20 +2008,95 @@ pub async fn get_category_for_snippet(snippet_id: i64) -> Result<Option<SnippetC
     }
 }
 
-/// Get count of snippets in a category
-pub async fn get_category_snippet_count(category_id: i64) -> Result<i64> {
+/// Get categorization reasoning for a snippet
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CategorizationReasoning {
+    pub snippet_id: i64,
+    pub category_id: i64,
+    pub category_name: String,
+    pub emoji: String,
+    pub categorization_method: String,
+    pub reasoning: Option<String>,
+    pub confidence: f64,
+    pub is_manual: bool,
+    pub assigned_at: String,
+}
+
+/// Get categorization reasoning for a snippet
+pub async fn get_categorization_reasoning(snippet_id: i64) -> Result<Option<CategorizationReasoning>> {
     let pool = get_pool().await?;
 
-    let count: i64 = sqlx::query_scalar(
+    let row = sqlx::query(
         r#"
-        SELECT COUNT(*)
-        FROM snippet_categories
-        WHERE category_id = ?
+        SELECT 
+            sc.snippet_id,
+            sc.category_id,
+            c.name as category_name,
+            c.emoji,
+            sc.categorization_method,
+            sc.llm_reasoning,
+            sc.confidence,
+            sc.is_manual,
+            sc.assigned_at
+        FROM snippet_categories sc
+        INNER JOIN categories c ON sc.category_id = c.id
+        WHERE sc.snippet_id = ?
         "#,
     )
-    .bind(category_id)
-    .fetch_one(&pool)
+    .bind(snippet_id)
+    .fetch_optional(&pool)
     .await?;
+
+    if let Some(row) = row {
+        let assigned_at_str: String = row.get(8);
+        
+        Ok(Some(CategorizationReasoning {
+            snippet_id: row.get(0),
+            category_id: row.get(1),
+            category_name: row.get(2),
+            emoji: row.get(3),
+            categorization_method: row.get(4),
+            reasoning: row.get(5),
+            confidence: row.get(6),
+            is_manual: row.get(7),
+            assigned_at: assigned_at_str,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Get count of snippets in a category
+pub async fn get_category_snippet_count(category_id: i64, content_type: Option<String>) -> Result<i64> {
+    let pool = get_pool().await?;
+
+    let count: i64 = if let Some(filter_type) = content_type {
+        // Count only snippets of the specified type
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM snippet_categories sc
+            INNER JOIN snippets s ON sc.snippet_id = s.id
+            WHERE sc.category_id = ? AND s.type = ?
+            "#,
+        )
+        .bind(category_id)
+        .bind(filter_type)
+        .fetch_one(&pool)
+        .await?
+    } else {
+        // Count all snippets
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM snippet_categories
+            WHERE category_id = ?
+            "#,
+        )
+        .bind(category_id)
+        .fetch_one(&pool)
+        .await?
+    };
 
     Ok(count)
 }

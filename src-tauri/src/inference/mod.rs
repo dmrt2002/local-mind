@@ -4,3 +4,4 @@ pub mod global_llm;
 pub mod llama;
 pub mod llm_manager;
 pub mod loader;
+pub mod summarization;

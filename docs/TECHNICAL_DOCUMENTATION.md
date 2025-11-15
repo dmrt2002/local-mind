@@ -95,9 +95,64 @@ LocalMind uses a **tab-based navigation** interface with three main sections:
 **Key UI Features:**
 - **Category Tree**: Hierarchical organization with expand/collapse, auto-expand on navigation
 - **Content Panel**: Displays snippets from selected category or search result
+- **Content Type Tabs**: Filter by All/Snippets/Commands/Screenshots
 - **Search Navigation**: Click search results to navigate to snippet location in Home tab
 - **Command Palette (Ctrl+K)**: Fuzzy search for all actions and commands
 - **Smart Suggestions**: AI-powered recommendations panel in Home tab
+- **Monitoring Settings**: Terminal and screenshot monitoring configuration
+
+### Content Types
+
+LocalMind supports three content types with specialized views:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  HOME TAB: [ All | Snippets | Commands | Screenshots ]       │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  SNIPPETS (text):                                            │
+│  - Rich text editor with syntax highlighting                 │
+│  - Edit, copy, delete actions                                │
+│  - Category assignment                                        │
+│                                                               │
+│  COMMANDS (terminal):                                        │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ 📁 /Users/me/project  •  2h ago  •  ✓ 0             │    │
+│  │ ──────────────────────────────────────────────────  │    │
+│  │  docker-compose up -d --build web                   │    │
+│  │  && docker logs -f web_1                            │    │
+│  │ ──────────────────────────────────────────────────  │    │
+│  │ via iTerm2                                  [Copy]   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│  - Working directory display                                 │
+│  - Exit code badge (✓ success, ✗ error)                     │
+│  - Syntax highlighting for shell commands                    │
+│  - Copy to clipboard                                         │
+│                                                               │
+│  SCREENSHOTS (images):                                       │
+│  ┌────────┬────────┬────────┐                               │
+│  │ [img]  │ [img]  │ [img]  │  Grid layout with:            │
+│  │ Title  │ Title  │ Title  │  - Thumbnails (16:9)          │
+│  │ URL    │ URL    │ Date   │  - Caption/title              │
+│  ├────────┼────────┼────────┤  - Website URL                │
+│  │ [img]  │ [img]  │ [img]  │  - Metadata                   │
+│  │ ...    │ ...    │ ...    │  - Click → Lightbox           │
+│  └────────┴────────┴────────┘                               │
+│                                                               │
+│  LIGHTBOX (click screenshot):                                │
+│  ┌─────────────────┬──────────────────────────────┐         │
+│  │                 │ Screenshot Details            │         │
+│  │   Full-size     │ Caption: "Code editor..."     │         │
+│  │   Image         │ URL: github.com/...           │         │
+│  │                 │ OCR Text:                      │         │
+│  │                 │   function main() {            │         │
+│  │                 │     println!("hello");         │         │
+│  │                 │   }                            │         │
+│  │                 │ Source: Chrome                 │         │
+│  │                 │ Date: 2h ago                   │         │
+│  └─────────────────┴──────────────────────────────┘         │
+└─────────────────────────────────────────────────────────────┘
+```
 - **Search Filters**: Advanced filtering by date, source app, embedding status
 - **Theme System**: CSS variables with localStorage caching for instant dark mode
 - **Real-time Stats**: Live memory and CPU usage monitoring
@@ -931,6 +986,208 @@ pub struct AdaptiveScheduler {
     }
 }
 ```
+
+### 6. Monitoring Systems
+
+**Purpose:** Automatically capture and index terminal commands and screenshots
+
+**Files:**
+- `src-tauri/src/monitors/terminal.rs` - Terminal command monitoring
+- `src-tauri/src/monitors/screenshots.rs` - Screenshot file monitoring
+- `src-tauri/src/processing/ocr.rs` - Tesseract OCR integration
+- `src-tauri/src/processing/vision.rs` - Florence-2 vision model
+- `src-tauri/src/processing/screenshot_processor.rs` - Processing pipeline
+
+**Architecture:**
+
+```rust
+// Terminal Monitoring
+pub struct TerminalMonitor {
+    log_path: PathBuf,              // ~/.localmind/terminal.log
+    filter: Arc<CommandFilter>,      // Blocklist/allowlist/heuristics
+    pending_command: Option<PendingCommand>,
+    job_queue: Arc<PersistentJobQueue>,
+    dedup_cache: HashMap<String, Instant>, // 5-minute window
+}
+
+// Command Filtering System
+pub struct CommandFilter {
+    blocklist: HashSet<String>,     // ls, cd, pwd, clear...
+    allowlist: HashSet<String>,     // docker, git, kubectl...
+    min_length: usize,              // 60 characters default
+}
+
+impl CommandFilter {
+    pub fn should_save(&self, command: &str) -> bool {
+        // 1. Skip blocklist
+        if self.blocklist.contains(command.split_whitespace().next()?) {
+            return false;
+        }
+
+        // 2. Always save allowlist
+        if self.allowlist.contains(command.split_whitespace().next()?) {
+            return true;
+        }
+
+        // 3. Apply heuristics
+        command.len() >= self.min_length ||
+        command.contains('|') ||           // Pipes
+        command.contains('>') ||           // Redirects
+        command.starts_with("sudo")        // Privileged
+    }
+}
+
+// Screenshot Monitoring
+pub struct ScreenshotMonitor {
+    screenshot_dir: PathBuf,
+    job_queue: Arc<PersistentJobQueue>,
+    processing_files: HashMap<PathBuf, Instant>,
+}
+
+// Screenshot Processing Pipeline
+pub async fn process_screenshot(
+    snippet_id: i64,
+    image_path: &Path,
+    job_queue: Arc<PersistentJobQueue>,
+) -> Result<()> {
+    let settings = settings::load_settings(&pool).await?;
+
+    // Step 1: OCR (if enabled)
+    let ocr_text = if settings.screenshot_ocr_enabled {
+        ocr::extract_text_from_image(image_path).await.ok()
+    } else { None };
+
+    // Step 2: Caption (if enabled)
+    let caption = if settings.screenshot_caption_enabled {
+        vision::generate_caption(image_path).await.ok()
+    } else { None };
+
+    // Step 3: Combine text
+    let combined = format!(
+        "[Caption: {}] [Text: {}]",
+        caption.unwrap_or_default(),
+        ocr_text.unwrap_or_default()
+    );
+
+    // Step 4: Update snippet content
+    update_snippet_content(snippet_id, &combined, caption).await?;
+
+    // Step 5: Queue for embedding
+    job_queue.push(snippet_id, combined, caption, Priority::Normal).await?;
+
+    Ok(())
+}
+```
+
+**Startup Integration:**
+
+```rust
+// In main.rs - Monitoring systems start automatically
+let job_queue_arc = Arc::new(job_queue);
+
+// Load settings
+let settings = settings::load_settings(&pool).await?;
+
+// Start terminal monitoring if enabled
+if settings.terminal_monitoring_enabled {
+    let filter = CommandFilter::new(
+        settings.terminal_blocklist.split(','),
+        settings.terminal_allowlist.split(','),
+        settings.terminal_min_length,
+    );
+
+    let monitor = TerminalMonitor::new(job_queue_arc.clone(), filter)?;
+    tokio::spawn(async move {
+        monitor.start_monitoring().await
+    });
+}
+
+// Start screenshot monitoring if enabled
+if settings.screenshot_monitoring_enabled {
+    let monitor = ScreenshotMonitor::new(
+        screenshot_dir,
+        job_queue_arc.clone(),
+    );
+
+    tokio::spawn(async move {
+        monitor.start_monitoring().await
+    });
+}
+```
+
+**Shell Hook Integration:**
+
+Terminal monitoring requires shell hooks in `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`:
+
+```bash
+# Zsh hooks (preexec/precmd)
+__lm_log="~/.localmind/terminal.log"
+
+preexec() {
+    echo "$(date +%s)|CMD_START|$PWD|$1" >> "$__lm_log"
+}
+
+precmd() {
+    local exit_code=$?
+    echo "$(date +%s)|CMD_END|$PWD|$exit_code" >> "$__lm_log"
+}
+```
+
+**Database Schema Extension (Migration v13):**
+
+```sql
+-- Content type discriminator
+ALTER TABLE snippets ADD COLUMN type TEXT NOT NULL DEFAULT 'text';
+CREATE INDEX idx_snippets_type ON snippets(type);
+
+-- Terminal command metadata
+ALTER TABLE snippets ADD COLUMN working_directory TEXT NULL;
+ALTER TABLE snippets ADD COLUMN exit_code INTEGER NULL;
+CREATE INDEX idx_snippets_working_directory ON snippets(working_directory);
+
+-- Screenshot metadata
+ALTER TABLE snippets ADD COLUMN file_path TEXT NULL;
+ALTER TABLE snippets ADD COLUMN website_url TEXT NULL;
+ALTER TABLE snippets ADD COLUMN website_title TEXT NULL;
+CREATE INDEX idx_snippets_website_url ON snippets(website_url);
+
+-- Monitoring settings
+ALTER TABLE settings ADD COLUMN terminal_monitoring_enabled BOOLEAN DEFAULT 0;
+ALTER TABLE settings ADD COLUMN screenshot_monitoring_enabled BOOLEAN DEFAULT 0;
+ALTER TABLE settings ADD COLUMN screenshot_ocr_enabled BOOLEAN DEFAULT 1;
+ALTER TABLE settings ADD COLUMN screenshot_caption_enabled BOOLEAN DEFAULT 1;
+```
+
+**Content Type Handling:**
+
+```typescript
+// Frontend: Content type tabs
+type ContentType = "all" | "text" | "command" | "screenshot";
+
+// Different card components for each type
+{snippet.type === "command" && <CommandCard snippet={snippet} />}
+{snippet.type === "screenshot" && <ScreenshotCard snippet={snippet} />}
+{snippet.type === "text" && <SnippetCard snippet={snippet} />}
+```
+
+**Performance Characteristics:**
+
+| Operation | CPU | Memory | Latency |
+|-----------|-----|--------|---------|
+| Terminal log polling | <1% | <1MB | 2s interval |
+| Command save | <1% | <1KB | <10ms |
+| Screenshot detection | <1% | <1MB | 2s interval |
+| OCR (Tesseract) | 20-40% | ~100MB | 1-3s |
+| Vision (Florence-2) | 30-60% | ~500MB | 2-5s |
+| Embedding (shared) | 40-80% | ~86MB | 1-2s |
+
+**External Dependencies:**
+
+- **Tesseract OCR**: System binary (`brew install tesseract`)
+- **Florence-2**: Optional, ONNX model or Python script
+- **File Watchers**: Polling-based (notify crate for production)
+
+**See Also:** [Monitoring Guide](features/MONITORING_GUIDE.md) for complete user documentation.
 
 ---
 

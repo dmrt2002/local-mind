@@ -37,19 +37,67 @@ pub fn suggest_category_from_content(content: &str) -> (String, String) {
         ("public class", "Code Snippets", "💻", 8),
         ("private ", "Code Snippets", "💻", 5),
 
-        // Commands & Terminal
-        ("npm install", "Commands", "⚙️", 7),
-        ("cargo build", "Commands", "⚙️", 7),
-        ("docker run", "Commands", "⚙️", 7),
-        ("git commit", "Commands", "⚙️", 7),
-        ("npm ", "Commands", "⚙️", 5),
-        ("cargo ", "Commands", "⚙️", 5),
-        ("docker ", "Commands", "⚙️", 5),
-        ("git ", "Commands", "⚙️", 5),
-        ("brew ", "Commands", "⚙️", 5),
-        ("apt ", "Commands", "⚙️", 5),
-        ("sudo ", "Commands", "⚙️", 5),
-        ("$ ", "Commands", "⚙️", 4),
+        // Commands & Terminal - USE CANONICAL CATEGORY NAMES
+        // Docker commands
+        ("docker-compose ", "Docker Commands", "🐳", 8),
+        ("docker compose ", "Docker Commands", "🐳", 8),
+        ("docker run", "Docker Commands", "🐳", 7),
+        ("docker build", "Docker Commands", "🐳", 7),
+        ("docker ", "Docker Commands", "🐳", 5),
+
+        // Node.js / NPM commands
+        ("npm install", "Node.js Development", "📦", 7),
+        ("npm run", "Node.js Development", "📦", 7),
+        ("yarn ", "Node.js Development", "📦", 7),
+        ("pnpm ", "Node.js Development", "📦", 7),
+        ("npx ", "Node.js Development", "📦", 7),
+        ("npm ", "Node.js Development", "📦", 5),
+
+        // Git commands
+        ("git commit", "Git Commands", "🔀", 7),
+        ("git push", "Git Commands", "🔀", 7),
+        ("git pull", "Git Commands", "🔀", 7),
+        ("git ", "Git Commands", "🔀", 5),
+
+        // Rust development
+        ("cargo build", "Rust Development", "🦀", 7),
+        ("cargo run", "Rust Development", "🦀", 7),
+        ("cargo test", "Rust Development", "🦀", 7),
+        ("cargo ", "Rust Development", "🦀", 5),
+        ("rustc ", "Rust Development", "🦀", 5),
+
+        // Python development
+        ("python ", "Python Development", "🐍", 6),
+        ("pip install", "Python Development", "🐍", 7),
+        ("pip ", "Python Development", "🐍", 5),
+        ("poetry ", "Python Development", "🐍", 6),
+
+        // Kubernetes
+        ("kubectl ", "Kubernetes", "☸️", 7),
+        ("helm ", "Kubernetes", "☸️", 7),
+        ("k9s ", "Kubernetes", "☸️", 7),
+
+        // Cloud CLI
+        ("aws ", "Cloud CLI", "☁️", 6),
+        ("gcloud ", "Cloud CLI", "☁️", 6),
+        ("az ", "Cloud CLI", "☁️", 6),
+
+        // System Administration
+        ("ssh ", "System Administration", "🔧", 6),
+        ("scp ", "System Administration", "🔧", 6),
+        ("rsync ", "System Administration", "🔧", 6),
+        ("sudo ", "System Administration", "🔧", 5),
+
+        // Build Tools
+        ("make ", "Build Tools", "🔨", 6),
+        ("cmake ", "Build Tools", "🔨", 6),
+        ("gradle ", "Build Tools", "🔨", 6),
+        ("mvn ", "Build Tools", "🔨", 6),
+
+        // Generic shell (only if nothing else matches)
+        ("brew ", "Package Management", "📦", 4),
+        ("apt ", "Package Management", "📦", 4),
+        ("$ ", "Shell Commands", "⌨️", 3),
 
         // Web Development
         ("<html", "Web Development", "🌐", 8),
@@ -131,16 +179,40 @@ pub fn suggest_category_from_content(content: &str) -> (String, String) {
         return (category_name.clone(), emoji.clone());
     }
 
-    // Fallback: analyze content type
-    if content.lines().count() > 5 {
-        return ("Long Notes".to_string(), "📄".to_string());
+    // Fallback: analyze content quality, not just line count
+    // Don't blindly categorize as "Long Notes" based on lines -
+    // screenshots often have many lines of garbage
+
+    let line_count = content.lines().count();
+    let char_count = content.len();
+    let word_count = content.split_whitespace().count();
+
+    // Calculate content quality metrics
+    let avg_line_length = if line_count > 0 {
+        char_count as f32 / line_count as f32
+    } else {
+        0.0
+    };
+
+    let avg_word_length = if word_count > 0 {
+        char_count as f32 / word_count as f32
+    } else {
+        0.0
+    };
+
+    // High quality multi-line content (actual notes/documentation)
+    // - Many lines with good average length
+    // - Reasonable word length (not gibberish)
+    if line_count > 8 && avg_line_length > 30.0 && avg_word_length > 4.0 && avg_word_length < 12.0 {
+        return ("Notes".to_string(), "📄".to_string());
     }
 
-    if content.len() < 100 {
+    // Short content
+    if char_count < 100 || word_count < 10 {
         return ("Quick Notes".to_string(), "✏️".to_string());
     }
 
-    // Default category
+    // Default category for everything else
     ("Uncategorized".to_string(), "📁".to_string())
 }
 

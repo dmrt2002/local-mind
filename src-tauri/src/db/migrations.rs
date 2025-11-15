@@ -3,7 +3,7 @@ use log;
 use sqlx::{sqlite::SqlitePool, Row};
 
 /// Current database schema version
-const CURRENT_VERSION: i32 = 12;
+const CURRENT_VERSION: i32 = 18;
 
 /// Migration definitions
 #[derive(Debug)]
@@ -308,6 +308,103 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE settings ADD COLUMN run_in_background BOOLEAN DEFAULT 1;
         "#,
     },
+    Migration {
+        version: 13,
+        name: "add_content_types_and_monitoring_support",
+        up: r#"
+            -- Add content type system to snippets table
+            ALTER TABLE snippets ADD COLUMN type TEXT NOT NULL DEFAULT 'text';
+            -- Values: 'text' (clipboard snippets) | 'command' (terminal) | 'screenshot'
+
+            -- Add file path for screenshots
+            ALTER TABLE snippets ADD COLUMN file_path TEXT NULL;
+
+            -- Add working directory for commands
+            ALTER TABLE snippets ADD COLUMN working_directory TEXT NULL;
+
+            -- Add exit code for commands (0=success, non-zero=error)
+            ALTER TABLE snippets ADD COLUMN exit_code INTEGER NULL;
+
+            -- Add website URL for screenshots captured from browsers
+            ALTER TABLE snippets ADD COLUMN website_url TEXT NULL;
+
+            -- Add website title for screenshots captured from browsers
+            ALTER TABLE snippets ADD COLUMN website_title TEXT NULL;
+
+            -- Performance indices for new columns
+            CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(type);
+            CREATE INDEX IF NOT EXISTS idx_snippets_working_directory ON snippets(working_directory);
+            CREATE INDEX IF NOT EXISTS idx_snippets_website_url ON snippets(website_url);
+
+            -- Add terminal monitoring settings
+            ALTER TABLE settings ADD COLUMN terminal_monitoring_enabled BOOLEAN DEFAULT 0;
+            ALTER TABLE settings ADD COLUMN terminal_blocklist TEXT DEFAULT 'ls,cd,pwd,clear,exit,history,echo,cat,which,type';
+            ALTER TABLE settings ADD COLUMN terminal_allowlist TEXT DEFAULT 'docker,git,kubectl,npm,cargo,python,ffmpeg,curl,aws,gcloud,az,terraform,ansible,ssh,scp,rsync';
+            ALTER TABLE settings ADD COLUMN terminal_min_length INTEGER DEFAULT 60;
+            ALTER TABLE settings ADD COLUMN shell_type TEXT DEFAULT 'zsh';
+
+            -- Add screenshot monitoring settings
+            ALTER TABLE settings ADD COLUMN screenshot_monitoring_enabled BOOLEAN DEFAULT 0;
+            ALTER TABLE settings ADD COLUMN screenshot_directory TEXT DEFAULT '';
+            ALTER TABLE settings ADD COLUMN screenshot_ocr_enabled BOOLEAN DEFAULT 1;
+            ALTER TABLE settings ADD COLUMN screenshot_caption_enabled BOOLEAN DEFAULT 1;
+            ALTER TABLE settings ADD COLUMN visual_search_enabled BOOLEAN DEFAULT 0;
+        "#,
+    },
+    Migration {
+        version: 14,
+        name: "add_screenshot_deduplication_index",
+        up: r#"
+            -- Create unique index on content_hash for screenshots to prevent duplicates
+            -- This allows multiple text snippets with same hash but only one screenshot per hash
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_screenshot_content_hash
+            ON snippets(content_hash)
+            WHERE type = 'screenshot' AND content_hash IS NOT NULL;
+        "#,
+    },
+    Migration {
+        version: 15,
+        name: "add_command_deduplication_index",
+        up: r#"
+            -- This migration needs to be handled in Rust code due to hash calculation
+            -- See run_migrations() for the actual implementation
+            -- We'll use a placeholder here and do the work in apply_migration_15()
+            SELECT 1;
+        "#,
+    },
+    Migration {
+        version: 16,
+        name: "add_ocr_settings",
+        up: r#"
+            -- Add OCR engine settings to settings table
+            ALTER TABLE settings ADD COLUMN ocr_engine TEXT DEFAULT 'auto';
+            ALTER TABLE settings ADD COLUMN ocr_recognition_level TEXT DEFAULT 'accurate';
+            ALTER TABLE settings ADD COLUMN ocr_cleaning_level TEXT DEFAULT 'balanced';
+            ALTER TABLE settings ADD COLUMN tesseract_psm_mode INTEGER DEFAULT 3;
+        "#,
+    },
+    Migration {
+        version: 17,
+        name: "add_category_unique_constraint",
+        up: r#"
+            -- Add unique constraint on (name, parent_id) to prevent duplicate categories
+            -- This prevents race conditions where multiple jobs try to create the same category
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name_parent_unique 
+            ON categories(name, parent_id);
+        "#,
+    },
+    Migration {
+        version: 18,
+        name: "add_content_hash_unique_constraint",
+        up: r#"
+            -- Add unique constraint on content_hash for ALL snippet types to prevent duplicates
+            -- This prevents duplicates at database level even if application logic fails
+            -- Only applies where content_hash IS NOT NULL (allows NULL for legacy data)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_content_hash_unique 
+            ON snippets(content_hash) 
+            WHERE content_hash IS NOT NULL;
+        "#,
+    },
 ];
 
 /// Create migrations table if it doesn't exist
@@ -372,21 +469,94 @@ async fn apply_migration(pool: &SqlitePool, migration: &Migration) -> Result<()>
         migration.name
     );
 
-    // Execute migration SQL
-    sqlx::query(migration.up)
-        .execute(pool)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to execute migration {}: {}",
-                migration.version, migration.name
-            )
-        })?;
+    // Special handling for migration 15 (command deduplication)
+    if migration.version == 15 {
+        apply_migration_15(pool).await?;
+    } else {
+        // Execute migration SQL
+        sqlx::query(migration.up)
+            .execute(pool)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to execute migration {}: {}",
+                    migration.version, migration.name
+                )
+            })?;
+    }
 
     // Record migration
     record_migration(pool, migration.version, migration.name).await?;
 
     log::info!("✓ Migration {} applied successfully", migration.version);
+
+    Ok(())
+}
+
+/// Special migration 15: Add command deduplication with hash recalculation and cleanup
+async fn apply_migration_15(pool: &SqlitePool) -> Result<()> {
+    log::info!("Step 1: Recalculating command hashes...");
+
+    // Recalculate all command hashes using the dedup module
+    let count = crate::dedup::recalculate_command_hashes(pool).await?;
+    log::info!("✓ Recalculated {} command hashes", count);
+
+    log::info!("Step 2: Removing duplicate commands...");
+
+    // Find duplicates: commands with same content_hash
+    let duplicates: Vec<(String, i64)> = sqlx::query_as(
+        r#"
+        SELECT content_hash, COUNT(*) as count
+        FROM snippets
+        WHERE type = 'command' AND content_hash IS NOT NULL
+        GROUP BY content_hash
+        HAVING COUNT(*) > 1
+        "#
+    )
+    .fetch_all(pool)
+    .await
+    .context("Failed to find duplicate commands")?;
+
+    let mut total_deleted = 0;
+
+    for (hash, _count) in duplicates {
+        // Get all IDs for this hash, ordered by created_at (oldest first)
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM snippets WHERE content_hash = ? AND type = 'command' ORDER BY created_at ASC"
+        )
+        .bind(&hash)
+        .fetch_all(pool)
+        .await?;
+
+        // Delete all except the first (oldest)
+        if ids.len() > 1 {
+            for id in &ids[1..] {
+                sqlx::query("DELETE FROM snippets WHERE id = ?")
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+                total_deleted += 1;
+            }
+        }
+    }
+
+    log::info!("✓ Deleted {} duplicate commands", total_deleted);
+
+    log::info!("Step 3: Creating unique index...");
+
+    // Now create the unique index
+    sqlx::query(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_command_content_hash
+        ON snippets(content_hash)
+        WHERE type = 'command' AND content_hash IS NOT NULL
+        "#
+    )
+    .execute(pool)
+    .await
+    .context("Failed to create unique index")?;
+
+    log::info!("✓ Created unique index on command content_hash");
 
     Ok(())
 }

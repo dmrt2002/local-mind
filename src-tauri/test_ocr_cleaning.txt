@@ -1,0 +1,60 @@
+Sample OCR text (before cleaning):
+
+e @ ® (76) whatsApp x (CH Meet - ohj-vaap-ihp
+CG © meet. google.com/ohj-vaap-ihp a 5} @ work
+(HM Meet - cdh-aqus-... (Meet ™ Zethic Mail PayWize Work Log... $8 PayWize-Web-Ap... Candidate Feedba...
+S Subramanya Rao (Presenting)
+( '
+People
+Ss &t Add people
+Subramanya Rao Tushar R
+y \ )) Q__ Search for people
+@ Chrome File Edit View History Bookmarks Profiles Tab Window Help & © TB & =F Q &> wWed12Nov 11:28PM
+Qh Meet - ohj-vaap-ihp © x @ uttarakhand-Google Search x + v IN THE MEETING
+€ Cc 23 googk |_ssp=eJzj4tTP1 'Bg9OIuLSIJL _lerp=EgZjaHJvbWUqDggBEC4YChgLGLEDGIAEM... x S Work
+CG : Contributors
+J200gle uttarakhand x eaQQ
+State of India i
+ae #44 rT) Tushar R (You)
+= OLE ce Caml
+ferafea (Bug
+Kael Subramanya Rao
+Vikasnagar 1 Meeting host
+Paonta Sahib. Mussoorie
+WaratfenHetherpu rat é °
+pen JON rs] Subramanya Rao
+ape :
+ears 9 coe Presentation
+hni kund Bai o tar
+Fe Dehradun
+aera
+sgn sopogse
+Behat Dojviala Ge
+'age stgaret fe +
+Shivous Devprayag
+Rishikesh» 23% one a
+1 Open in Maps mate et
+Kovayale Map data ®2025 Terms
+Things to do About
+Uttarakhand, a state in northern India crossed by the
+Himalayas, is known for its Hindu pilgrimage sites.
+Rishikesh, a major centre for yoga study, was made famous
+by the Beatles' 1968 visit. The city hosts the evening Ganga
+Aarti, a spiritual gathering on the sacred Ganges River. The
+11:28 PM | ohj-vaap-ihp Wt oO ~ EX\
+
+===
+
+After enhanced cleaning, the text should extract:
+- URL: meet.google.com/ohj-vaap-ihp
+- Main content: "Uttarakhand, a state in northern India crossed by the Himalayas, is known for its Hindu pilgrimage sites."
+- Context: "Rishikesh, a major centre for yoga study, was made famous by the Beatles' 1968 visit."
+- Additional: "The city hosts the evening Ganga Aarti, a spiritual gathering on the sacred Ganges River."
+
+Filtered out:
+- Single characters and symbols (e, @, ®, x, etc.)
+- Browser UI elements (Chrome, File, Edit, View, etc.)
+- Video call UI (People, Add people, Search for people, etc.)
+- Participant names (Subramanya Rao, Tushar R, etc.)
+- Navigation controls and timestamps
+- Fragmented location names without context

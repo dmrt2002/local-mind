@@ -10,6 +10,13 @@ export interface Snippet {
   created_at: string;
   source_app?: string;
   metadata?: string;
+  // New fields for content types
+  type?: "text" | "command" | "screenshot";
+  file_path?: string;
+  working_directory?: string;
+  exit_code?: number;
+  website_url?: string;
+  website_title?: string;
 }
 
 interface SnippetCardProps {

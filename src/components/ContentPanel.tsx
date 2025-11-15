@@ -1,24 +1,31 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import SnippetCard, { Snippet } from "./SnippetCard";
+import CommandCard from "./CommandCard";
+import ScreenshotCard from "./ScreenshotCard";
+import ScreenshotLightbox from "./ScreenshotLightbox";
+import { ContentType } from "./ContentTypeTabs";
 import "./ContentPanel.css";
 
 interface ContentPanelProps {
   categoryId: number | null;
   snippetId?: number | null;
+  contentType?: ContentType;
   onClearSnippet?: () => void;
 }
 
 const PAGE_SIZE = 50; // Load 50 snippets at a time
 
-export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: ContentPanelProps) {
+export default function ContentPanel({ categoryId, snippetId, contentType = "all", onClearSnippet }: ContentPanelProps) {
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [selectedSnippet, setSelectedSnippet] = useState<Snippet | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lightboxSnippet, setLightboxSnippet] = useState<Snippet | null>(null);
 
   // Cache for loaded category data to avoid re-fetching
-  const categoryCache = useRef<Map<number, Snippet[]>>(new Map());
+  // Cache key format: `${categoryId}-${contentType}`
+  const categoryCache = useRef<Map<string, Snippet[]>>(new Map());
   const loadingRef = useRef(false);
 
   // Load snippets for the selected category
@@ -26,9 +33,12 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
     // Prevent concurrent requests
     if (loadingRef.current) return;
 
+    // Create cache key with categoryId and contentType
+    const cacheKey = `${catId}-${contentType}`;
+
     // Check cache first (only for offset 0)
-    if (offset === 0 && categoryCache.current.has(catId)) {
-      const cached = categoryCache.current.get(catId)!;
+    if (offset === 0 && categoryCache.current.has(cacheKey)) {
+      const cached = categoryCache.current.get(cacheKey)!;
       setSnippets(cached);
       setError(null);
       return;
@@ -43,12 +53,13 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
         categoryId: catId,
         limit: PAGE_SIZE,
         offset,
+        contentType: contentType === "all" ? null : contentType,
       });
 
       if (offset === 0) {
         setSnippets(results);
-        // Cache the results
-        categoryCache.current.set(catId, results);
+        // Cache the results with contentType in key
+        categoryCache.current.set(cacheKey, results);
       } else {
         setSnippets((prev) => [...prev, ...results]);
       }
@@ -60,7 +71,7 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
       setLoading(false);
       loadingRef.current = false;
     }
-  }, []);
+  }, [contentType]);
 
   // Load a single snippet
   const loadSingleSnippet = useCallback(async (id: number) => {
@@ -84,11 +95,12 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
     if (snippetId && selectedSnippet) {
       loadSingleSnippet(snippetId);
     } else if (categoryId !== null) {
-      // Invalidate cache for this category
-      categoryCache.current.delete(categoryId);
+      // Invalidate cache for this category and content type
+      const cacheKey = `${categoryId}-${contentType}`;
+      categoryCache.current.delete(cacheKey);
       loadSnippets(categoryId, 0);
     }
-  }, [snippetId, selectedSnippet, categoryId, loadSingleSnippet, loadSnippets]);
+  }, [snippetId, selectedSnippet, categoryId, contentType, loadSingleSnippet, loadSnippets]);
 
   // Reset and load when category changes
   useEffect(() => {
@@ -101,6 +113,25 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryId, snippetId]);
+
+  // Reload when contentType changes if category is selected
+  useEffect(() => {
+    if (categoryId !== null && !snippetId) {
+      // Clear cache for all content types of this category
+      // (invalidate all possible cache keys for this category)
+      const keysToDelete: string[] = [];
+      categoryCache.current.forEach((_, key) => {
+        if (key.startsWith(`${categoryId}-`)) {
+          keysToDelete.push(key);
+        }
+      });
+      keysToDelete.forEach((key) => categoryCache.current.delete(key));
+      
+      // Reload with new content type
+      loadSnippets(categoryId, 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentType]);
 
   // Load single snippet when snippetId changes
   useEffect(() => {
@@ -115,6 +146,35 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
 
   // Show single snippet view
   if (selectedSnippet) {
+    // Check if it's a screenshot - show lightbox instead of text view
+    const snippetType = selectedSnippet.type || "text";
+    if (snippetType === "screenshot") {
+      return (
+        <>
+          <div className="content-panel">
+            <div className="content-header">
+              <button
+                className="back-button"
+                onClick={onClearSnippet}
+                title="Back to category"
+              >
+                ← Back
+              </button>
+              <h2>{selectedSnippet.summary || "Screenshot"}</h2>
+            </div>
+          </div>
+          <ScreenshotLightbox
+            snippet={selectedSnippet}
+            onClose={() => {
+              if (onClearSnippet) {
+                onClearSnippet();
+              }
+            }}
+          />
+        </>
+      );
+    }
+
     return (
       <div className="content-panel">
         <div className="content-header">
@@ -221,25 +281,65 @@ export default function ContentPanel({ categoryId, snippetId, onClearSnippet }: 
     );
   }
 
+  // Filter snippets by content type
+  const filteredSnippets = snippets.filter((snippet) => {
+    if (contentType === "all") return true;
+    const snippetType = snippet.type || "text";
+    return snippetType === contentType;
+  });
+
+  // Render different card types based on content type
+  const renderSnippet = (snippet: Snippet) => {
+    const snippetType = snippet.type || "text";
+
+    if (snippetType === "command") {
+      return <CommandCard key={snippet.id} snippet={snippet} onUpdate={handleSnippetUpdate} />;
+    } else if (snippetType === "screenshot") {
+      return (
+        <ScreenshotCard
+          key={snippet.id}
+          snippet={snippet}
+          onClick={() => setLightboxSnippet(snippet)}
+        />
+      );
+    } else {
+      return <SnippetCard key={snippet.id} snippet={snippet} onUpdate={handleSnippetUpdate} />;
+    }
+  };
+
   return (
-    <div className="content-panel">
-      <div className="content-header">
-        <h2>Snippets</h2>
-        <span className="snippet-count">{snippets.length} items</span>
-      </div>
-      <div className="content-list">
-        <div className="snippets-container">
-          {snippets.map((snippet) => (
-            <SnippetCard key={snippet.id} snippet={snippet} onUpdate={handleSnippetUpdate} />
-          ))}
+    <>
+      <div className="content-panel">
+        <div className="content-header">
+          <h2>
+            {contentType === "command" && "Commands"}
+            {contentType === "screenshot" && "Screenshots"}
+            {(contentType === "text" || contentType === "all") && "Snippets"}
+          </h2>
+          <span className="snippet-count">{filteredSnippets.length} items</span>
         </div>
-        {loading && (
-          <div className="loading-indicator">
-            <div className="spinner"></div>
-            Loading snippets...
+        <div className="content-list">
+          <div
+            className={`snippets-container ${
+              contentType === "screenshot" ? "screenshots-grid" : ""
+            }`}
+          >
+            {filteredSnippets.map(renderSnippet)}
           </div>
-        )}
+          {loading && (
+            <div className="loading-indicator">
+              <div className="spinner"></div>
+              Loading...
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+      {lightboxSnippet && (
+        <ScreenshotLightbox
+          snippet={lightboxSnippet}
+          onClose={() => setLightboxSnippet(null)}
+        />
+      )}
+    </>
   );
 }

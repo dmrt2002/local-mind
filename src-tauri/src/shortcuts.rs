@@ -20,15 +20,23 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<()> {
 
     // Register save shortcut
     let save_shortcut = settings.shortcut_save.clone();
-    manager.register(&save_shortcut, {
+    info!("🔑 Attempting to register save shortcut: '{}'", save_shortcut);
+
+    match manager.register(&save_shortcut, {
         let app = app.clone();
         move || {
+            info!("🎯 SAVE SHORTCUT TRIGGERED!");
             if let Err(e) = handle_save_shortcut(app.clone()) {
                 error!("Failed to handle save shortcut: {}", e);
             }
         }
-    })?;
-    info!("Registered save shortcut: {}", save_shortcut);
+    }) {
+        Ok(_) => info!("✅ Successfully registered save shortcut: {}", save_shortcut),
+        Err(e) => {
+            error!("❌ Failed to register save shortcut '{}': {}", save_shortcut, e);
+            return Err(e.into());
+        }
+    }
 
     // Register search shortcut
     let search_shortcut = settings.shortcut_search.clone();
@@ -113,24 +121,50 @@ fn handle_save_shortcut(app: AppHandle) -> Result<()> {
     // Save snippet (async call)
     let app_clone = app.clone();
     tokio::spawn(async move {
-        let job_queue: tauri::State<'_, PersistentJobQueue> = app_clone.state();
+        use crate::db::sqlite;
+        use std::sync::Arc;
 
-        match commands::save_snippet(content.clone(), source_app, metadata, job_queue).await {
-            Ok(snippet_id) => {
-                info!("✓✓✓ Snippet saved successfully with ID: {}", snippet_id.id);
-                info!("Saved content verification - Original: {} chars, Snippet ID: {}", 
-                      content.len(), snippet_id.id);
-                // Emit event to frontend via window
-                if let Some(window) = app_clone.get_window("main") {
-                    let _ = window.emit("snippet-saved", snippet_id);
-                }
-            }
+        // Get job queue from app state (managed as Arc<PersistentJobQueue>)
+        let job_queue_arc: tauri::State<'_, Arc<PersistentJobQueue>> = app_clone.state();
+
+        // Save to SQLite immediately (instant keyword search)
+        let id = match sqlite::save_snippet(content.clone(), source_app, metadata).await {
+            Ok(id) => id,
             Err(e) => {
                 error!("✗✗✗ Failed to save snippet: {}", e);
                 if let Some(window) = app_clone.get_window("main") {
                     let _ = window.emit("snippet-save-error", e.to_string());
                 }
+                return;
             }
+        };
+
+        // Get the snippet to retrieve its summary
+        let snippet = match sqlite::get_snippet(id).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                error!("✗✗✗ Snippet {} not found after saving", id);
+                return;
+            }
+            Err(e) => {
+                error!("✗✗✗ Failed to retrieve snippet: {}", e);
+                return;
+            }
+        };
+
+        // Queue embedding job (background processing) with summary
+        if let Err(e) = job_queue_arc.push(id, content.clone(), snippet.summary, crate::job_queue::Priority::Normal).await {
+            error!("✗✗✗ Failed to queue embedding job: {}", e);
+            return;
+        }
+
+        info!("✓✓✓ Snippet saved successfully with ID: {}", id);
+        info!("Saved content verification - Original: {} chars, Snippet ID: {}",
+              content.len(), id);
+
+        // Emit event to frontend via window
+        if let Some(window) = app_clone.get_window("main") {
+            let _ = window.emit("snippet-saved", commands::SnippetId { id });
         }
     });
 

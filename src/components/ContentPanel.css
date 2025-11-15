@@ -67,6 +67,23 @@
   padding: 16px;
 }
 
+/* Grid layout for screenshots - override default padding */
+.snippets-container.screenshots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+/* Responsive adjustments for screenshot grid */
+@media (max-width: 768px) {
+  .snippets-container.screenshots-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    padding: 12px;
+  }
+}
+
 .content-panel-empty {
   display: flex;
   align-items: center;

@@ -43,7 +43,11 @@
       },
       "fs": {
         "all": true,
-        "scope": ["$APPDATA/**", "$HOME/**"]
+        "scope": ["$APPDATA/**", "$HOME/**", "$RESOURCE/../**", "$RESOURCE/../data/**"]
+      },
+      "protocol": {
+        "asset": true,
+        "assetScope": ["$APPDATA/**", "$HOME/**", "$RESOURCE/../**", "$RESOURCE/../data/**", "**"]
       }
     },
     "bundle": {
@@ -59,7 +63,7 @@
       "resources": ["models/**/*"]
     },
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:* data: blob:"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:* data: blob: asset: https://asset.localhost tauri: https://tauri.localhost"
     },
     "windows": [
       {

@@ -14,3 +14,5 @@ pub mod inference;
 pub mod rag;
 pub mod search;
 pub mod settings;
+pub mod monitors;
+pub mod processing;

@@ -4,6 +4,7 @@ import { save, open } from "@tauri-apps/api/dialog";
 import { logger } from "../utils/logger";
 import { useToast } from "../hooks/useToast";
 import DuplicateManager from "./DuplicateManager";
+import DeleteAllDataModal from "./DeleteAllDataModal";
 import "./SettingsWindow.css";
 
 interface Settings {
@@ -13,6 +14,23 @@ interface Settings {
   shortcut_save: string;
   shortcut_search: string;
   run_in_background: boolean;
+  // Terminal monitoring
+  terminal_monitoring_enabled: boolean;
+  terminal_blocklist: string;
+  terminal_allowlist: string;
+  terminal_min_length: number;
+  shell_type: string;
+  // Screenshot monitoring
+  screenshot_monitoring_enabled: boolean;
+  screenshot_directory: string;
+  screenshot_ocr_enabled: boolean;
+  screenshot_caption_enabled: boolean;
+  visual_search_enabled: boolean;
+  // OCR settings
+  ocr_engine: string;
+  ocr_recognition_level: string;
+  ocr_cleaning_level: string;
+  tesseract_psm_mode: number;
 }
 
 interface StorageStats {
@@ -41,6 +59,7 @@ interface ExportRecord {
 }
 
 export default function SettingsWindow() {
+  const { showToast } = useToast();
   const [settings, setSettings] = useState<Settings>({
     theme: "light",
     enable_semantic_search: true,
@@ -48,7 +67,26 @@ export default function SettingsWindow() {
     shortcut_save: "Alt+Shift+C",
     shortcut_search: "Alt+Shift+F",
     run_in_background: true,
+    terminal_monitoring_enabled: false,
+    terminal_blocklist: "ls,cd,pwd,clear,exit,history,echo,cat,which,type",
+    terminal_allowlist:
+      "docker,git,kubectl,npm,cargo,python,ffmpeg,curl,aws,gcloud,az,terraform,ansible,ssh,scp,rsync",
+    terminal_min_length: 60,
+    shell_type: "zsh",
+    screenshot_monitoring_enabled: false,
+    screenshot_directory: "",
+    screenshot_ocr_enabled: true,
+    screenshot_caption_enabled: true,
+    visual_search_enabled: false,
+    ocr_engine: "auto",
+    ocr_recognition_level: "accurate",
+    ocr_cleaning_level: "balanced",
+    tesseract_psm_mode: 3,
   });
+
+  const [appleVisionAvailable, setAppleVisionAvailable] = useState(false);
+  const [appleArchitecture, setAppleArchitecture] = useState<string>("");
+  const [rescanning, setRescanning] = useState(false);
 
   // Format shortcuts for display (Mac uses Option instead of Alt)
   const formatShortcutDisplay = (shortcut: string): string => {
@@ -58,17 +96,34 @@ export default function SettingsWindow() {
   const [memoryStats, setMemoryStats] = useState<MemoryStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   // Load settings on mount
   useEffect(() => {
     loadSettings();
     loadStorageStats();
     loadMemoryStats();
+    checkAppleVisionAvailability();
 
     // Update memory stats every 2 seconds
     const interval = setInterval(loadMemoryStats, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  const checkAppleVisionAvailability = async () => {
+    try {
+      const available = await invoke<boolean>("is_apple_vision_available");
+      setAppleVisionAvailable(available);
+
+      // Get architecture info for display
+      const arch = await invoke<string>("get_apple_architecture");
+      setAppleArchitecture(arch);
+    } catch (error) {
+      logger.error("Failed to check Apple Vision availability:", error);
+      setAppleVisionAvailable(false);
+      setAppleArchitecture("");
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -127,10 +182,48 @@ export default function SettingsWindow() {
     saveSettings({ ...settings, [key]: value });
   };
 
+  const handleTextChange = (key: keyof Settings, value: string) => {
+    saveSettings({ ...settings, [key]: value });
+  };
+
+  const handleNumberChange = (key: keyof Settings, value: number) => {
+    saveSettings({ ...settings, [key]: value });
+  };
+
+  const handleRescanScreenshots = async () => {
+    setRescanning(true);
+    try {
+      const result = await invoke<string>("rescan_screenshots");
+      showToast(result, "success");
+      logger.info("Screenshot rescan completed:", result);
+      // Reload storage stats to reflect changes
+      await loadStorageStats();
+    } catch (error) {
+      logger.error("Failed to rescan screenshots:", error);
+      showToast("Failed to rescan screenshots", "error");
+    } finally {
+      setRescanning(false);
+    }
+  };
+
   const formatBytes = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const handleDeleteAllData = async () => {
+    try {
+      await invoke("delete_all_data");
+      showToast("All data has been permanently deleted", "success");
+      // Reload storage stats
+      await loadStorageStats();
+      // Close the modal
+      setIsDeleteModalOpen(false);
+    } catch (err) {
+      logger.error("Failed to delete all data", err);
+      showToast("Failed to delete data", "error");
+    }
   };
 
   if (loading) {
@@ -161,7 +254,9 @@ export default function SettingsWindow() {
                 <input
                   type="checkbox"
                   checked={settings.theme === "dark"}
-                  onChange={(e) => handleThemeChange(e.target.checked ? "dark" : "light")}
+                  onChange={(e) =>
+                    handleThemeChange(e.target.checked ? "dark" : "light")
+                  }
                   disabled={saving}
                 />
                 <span className="toggle-slider"></span>
@@ -174,7 +269,8 @@ export default function SettingsWindow() {
         <section className="settings-section">
           <h2>Keyboard Shortcuts</h2>
           <p className="section-description">
-            Customize global keyboard shortcuts. Press keys in the input to record.
+            Customize global keyboard shortcuts. Press keys in the input to
+            record.
           </p>
           <div className="setting-item">
             <div className="setting-info">
@@ -193,7 +289,10 @@ export default function SettingsWindow() {
                   if (e.altKey) keys.push("Alt");
                   if (e.shiftKey) keys.push("Shift");
                   if (e.metaKey) keys.push("Cmd");
-                  if (e.key && !["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
+                  if (
+                    e.key &&
+                    !["Control", "Alt", "Shift", "Meta"].includes(e.key)
+                  ) {
                     keys.push(e.key.toUpperCase());
                   }
                   if (keys.length > 1) {
@@ -223,7 +322,10 @@ export default function SettingsWindow() {
                   if (e.altKey) keys.push("Alt");
                   if (e.shiftKey) keys.push("Shift");
                   if (e.metaKey) keys.push("Cmd");
-                  if (e.key && !["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
+                  if (
+                    e.key &&
+                    !["Control", "Alt", "Shift", "Meta"].includes(e.key)
+                  ) {
                     keys.push(e.key.toUpperCase());
                   }
                   if (keys.length > 1) {
@@ -251,7 +353,9 @@ export default function SettingsWindow() {
                 <input
                   type="checkbox"
                   checked={settings.run_in_background}
-                  onChange={(e) => handleToggle("run_in_background", e.target.checked)}
+                  onChange={(e) =>
+                    handleToggle("run_in_background", e.target.checked)
+                  }
                   disabled={saving}
                 />
                 <span className="toggle-slider"></span>
@@ -311,19 +415,27 @@ export default function SettingsWindow() {
               <div className="stats-grid">
                 <div className="stat-card">
                   <div className="stat-label">Total Size</div>
-                  <div className="stat-value">{formatBytes(storageStats.total_size)}</div>
+                  <div className="stat-value">
+                    {formatBytes(storageStats.total_size)}
+                  </div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-label">Snippets</div>
-                  <div className="stat-value">{storageStats.snippets_count}</div>
+                  <div className="stat-value">
+                    {storageStats.snippets_count}
+                  </div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-label">Categories</div>
-                  <div className="stat-value">{storageStats.categories_count}</div>
+                  <div className="stat-value">
+                    {storageStats.categories_count}
+                  </div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-label">Embeddings</div>
-                  <div className="stat-value">{storageStats.embeddings_count}</div>
+                  <div className="stat-value">
+                    {storageStats.embeddings_count}
+                  </div>
                 </div>
               </div>
               <div className="storage-breakdown">
@@ -347,6 +459,31 @@ export default function SettingsWindow() {
           )}
         </section>
 
+        {/* Danger Zone Section */}
+        <section className="settings-section danger-zone-section">
+          <h2>Danger Zone</h2>
+          <p className="section-description">
+            Irreversible actions that permanently delete your data.
+          </p>
+          <div className="danger-zone">
+            <div className="danger-action">
+              <div className="danger-info">
+                <h3>Delete All Data</h3>
+                <p>
+                  Permanently delete all snippets, commands, screenshots,
+                  categories, and embeddings. This action cannot be undone.
+                </p>
+              </div>
+              <button
+                className="danger-button"
+                onClick={() => setIsDeleteModalOpen(true)}
+              >
+                Delete All Data
+              </button>
+            </div>
+          </div>
+        </section>
+
         {/* Performance Section */}
         <section className="settings-section">
           <h2>Performance</h2>
@@ -355,19 +492,24 @@ export default function SettingsWindow() {
               <div className="stats-grid">
                 <div className="stat-card">
                   <div className="stat-label">Memory Usage (RAM)</div>
-                  <div className="stat-value">{memoryStats.rss_mb.toFixed(2)} MB</div>
+                  <div className="stat-value">
+                    {memoryStats.rss_mb.toFixed(2)} MB
+                  </div>
                   <div className="stat-note">Actual physical memory in use</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-label">CPU Usage</div>
-                  <div className="stat-value">{memoryStats.cpu_percent.toFixed(1)}%</div>
+                  <div className="stat-value">
+                    {memoryStats.cpu_percent.toFixed(1)}%
+                  </div>
                   <div className="stat-note">Current processor usage</div>
                 </div>
               </div>
               <div className="info-note">
-                <strong>Note:</strong> Virtual memory ({(memoryStats.virtual_mb / 1024).toFixed(1)} GB)
-                includes memory-mapped files and reserved address space.
-                The RAM usage above is the actual memory being used.
+                <strong>Note:</strong> Virtual memory (
+                {(memoryStats.virtual_mb / 1024).toFixed(1)} GB) includes
+                memory-mapped files and reserved address space. The RAM usage
+                above is the actual memory being used.
               </div>
             </>
           ) : (
@@ -378,6 +520,276 @@ export default function SettingsWindow() {
         {/* Export/Backup Section */}
         <ExportBackupSection />
 
+        {/* Monitoring Section */}
+        <section className="settings-section">
+          <h2>Monitoring</h2>
+          <p className="section-description">
+            Monitor and index terminal commands and screenshots
+          </p>
+
+          {/* Terminal Monitoring */}
+          <div className="setting-group">
+            <h3>Terminal Commands</h3>
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Enable Terminal Monitoring</label>
+                <p>Automatically capture and index shell commands</p>
+              </div>
+              <div className="setting-control">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.terminal_monitoring_enabled}
+                    onChange={(e) =>
+                      handleToggle(
+                        "terminal_monitoring_enabled",
+                        e.target.checked
+                      )
+                    }
+                    disabled={saving}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Screenshot Monitoring */}
+          <div className="setting-group">
+            <h3>Screenshots</h3>
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Enable Screenshot Monitoring</label>
+                <p>Automatically index screenshots with OCR and captioning</p>
+              </div>
+              <div className="setting-control">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.screenshot_monitoring_enabled}
+                    onChange={(e) =>
+                      handleToggle(
+                        "screenshot_monitoring_enabled",
+                        e.target.checked
+                      )
+                    }
+                    disabled={saving}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            {settings.screenshot_monitoring_enabled && (
+              <>
+                <div className="setting-item">
+                  <div className="setting-info">
+                    <label>OCR (Text Extraction)</label>
+                    <p>Extract text from screenshots using OCR engines</p>
+                  </div>
+                  <div className="setting-control">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settings.screenshot_ocr_enabled}
+                        onChange={(e) =>
+                          handleToggle(
+                            "screenshot_ocr_enabled",
+                            e.target.checked
+                          )
+                        }
+                        disabled={saving}
+                      />
+                      <span className="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* OCR Settings (shown when OCR is enabled) */}
+                {settings.screenshot_ocr_enabled && (
+                  <div className="ocr-settings-section">
+                    <div className="setting-item">
+                      <div className="setting-info">
+                        <label>OCR Engine</label>
+                        <p>Choose OCR engine for text extraction</p>
+                      </div>
+                      <div className="setting-control">
+                        <select
+                          value={settings.ocr_engine}
+                          onChange={(e) =>
+                            handleTextChange("ocr_engine", e.target.value)
+                          }
+                          disabled={saving}
+                          className="ocr-engine-select"
+                        >
+                          <option value="auto">
+                            Auto{" "}
+                            {appleVisionAvailable
+                              ? `(Apple Vision${
+                                  appleArchitecture
+                                    ? ` - ${appleArchitecture}`
+                                    : ""
+                                })`
+                              : "(Tesseract)"}
+                          </option>
+                          <option
+                            value="apple_vision"
+                            disabled={!appleVisionAvailable}
+                          >
+                            Apple Vision
+                            {appleArchitecture
+                              ? ` (${appleArchitecture})`
+                              : ""}{" "}
+                            {!appleVisionAvailable ? "(Not Available)" : ""}
+                          </option>
+                          <option value="tesseract">Tesseract</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {settings.ocr_engine !== "tesseract" &&
+                      appleVisionAvailable && (
+                        <div className="setting-item">
+                          <div className="setting-info">
+                            <label>Recognition Level</label>
+                            <p>Fast (~130ms) or Accurate (~200ms)</p>
+                          </div>
+                          <div className="setting-control">
+                            <select
+                              value={settings.ocr_recognition_level}
+                              onChange={(e) =>
+                                handleTextChange(
+                                  "ocr_recognition_level",
+                                  e.target.value
+                                )
+                              }
+                              disabled={saving}
+                            >
+                              <option value="fast">Fast</option>
+                              <option value="accurate">Accurate</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+
+                    <div className="setting-item">
+                      <div className="setting-info">
+                        <label>Text Cleaning Level</label>
+                        <p>How aggressively to filter OCR noise</p>
+                      </div>
+                      <div className="setting-control">
+                        <div className="cleaning-level-slider">
+                          <input
+                            type="range"
+                            min="0"
+                            max="2"
+                            value={
+                              settings.ocr_cleaning_level === "minimal"
+                                ? 0
+                                : settings.ocr_cleaning_level === "balanced"
+                                ? 1
+                                : 2
+                            }
+                            onChange={(e) => {
+                              const level = [
+                                "minimal",
+                                "balanced",
+                                "aggressive",
+                              ][parseInt(e.target.value)];
+                              handleTextChange("ocr_cleaning_level", level);
+                            }}
+                            disabled={saving}
+                          />
+                          <div className="slider-labels">
+                            <span>Minimal</span>
+                            <span>Balanced</span>
+                            <span>Aggressive</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Advanced Tesseract Settings */}
+                    <details className="advanced-ocr-settings">
+                      <summary>Advanced Settings</summary>
+                      <div className="setting-item">
+                        <div className="setting-info">
+                          <label>Tesseract PSM Mode</label>
+                          <p>Page Segmentation Mode for Tesseract</p>
+                        </div>
+                        <div className="setting-control">
+                          <select
+                            value={settings.tesseract_psm_mode}
+                            onChange={(e) =>
+                              handleNumberChange(
+                                "tesseract_psm_mode",
+                                parseInt(e.target.value)
+                              )
+                            }
+                            disabled={saving}
+                          >
+                            <option value="3">
+                              3 - Automatic (Recommended)
+                            </option>
+                            <option value="6">6 - Single uniform block</option>
+                            <option value="11">
+                              11 - Sparse text (Old default)
+                            </option>
+                            <option value="4">4 - Single column</option>
+                          </select>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                )}
+
+                <div className="setting-item">
+                  <div className="setting-info">
+                    <label>Image Captioning</label>
+                    <p>Generate descriptions using Florence-2 vision model</p>
+                  </div>
+                  <div className="setting-control">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={settings.screenshot_caption_enabled}
+                        onChange={(e) =>
+                          handleToggle(
+                            "screenshot_caption_enabled",
+                            e.target.checked
+                          )
+                        }
+                        disabled={saving}
+                      />
+                      <span className="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Rescan Button */}
+                <div className="setting-item">
+                  <div className="setting-info">
+                    <label>Rescan Existing Screenshots</label>
+                    <p>
+                      Process screenshots that exist on disk but aren't in the
+                      database
+                    </p>
+                  </div>
+                  <div className="setting-control">
+                    <button
+                      onClick={handleRescanScreenshots}
+                      disabled={rescanning || saving}
+                      className="rescan-button"
+                    >
+                      {rescanning ? "Rescanning..." : "Rescan Now"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+
         {/* Duplicate Detection Section */}
         <section className="settings-section">
           <DuplicateManager />
@@ -387,12 +799,28 @@ export default function SettingsWindow() {
         <section className="settings-section">
           <h2>About</h2>
           <div className="about-info">
-            <p><strong>LocalMind</strong></p>
+            <p>
+              <strong>LocalMind</strong>
+            </p>
             <p>Version 1.0.0</p>
             <p>100% Local Cognitive Context Assistant</p>
           </div>
         </section>
       </div>
+
+      {/* Delete All Data Modal */}
+      {storageStats && (
+        <DeleteAllDataModal
+          isOpen={isDeleteModalOpen}
+          onClose={() => setIsDeleteModalOpen(false)}
+          onConfirm={handleDeleteAllData}
+          storageStats={{
+            snippets_count: storageStats.snippets_count,
+            categories_count: storageStats.categories_count,
+            embeddings_count: storageStats.embeddings_count,
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -410,7 +838,9 @@ function ExportBackupSection() {
 
   const loadExportHistory = async () => {
     try {
-      const history = await invoke<ExportRecord[]>("get_export_history", { limit: 10 });
+      const history = await invoke<ExportRecord[]>("get_export_history", {
+        limit: 10,
+      });
       setExportHistory(history);
     } catch (err) {
       logger.error("Failed to load export history", err);
@@ -420,7 +850,9 @@ function ExportBackupSection() {
   const handleExportJSON = async () => {
     try {
       const filePath = await save({
-        defaultPath: `localmind-export-${new Date().toISOString().split('T')[0]}.json`,
+        defaultPath: `localmind-export-${
+          new Date().toISOString().split("T")[0]
+        }.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
 
@@ -446,7 +878,9 @@ function ExportBackupSection() {
   const handleExportMarkdown = async () => {
     try {
       const filePath = await save({
-        defaultPath: `localmind-export-${new Date().toISOString().split('T')[0]}.md`,
+        defaultPath: `localmind-export-${
+          new Date().toISOString().split("T")[0]
+        }.md`,
         filters: [{ name: "Markdown", extensions: ["md"] }],
       });
 
@@ -457,7 +891,10 @@ function ExportBackupSection() {
         filePath,
       });
 
-      showToast(`Successfully exported ${count} snippets to Markdown`, "success");
+      showToast(
+        `Successfully exported ${count} snippets to Markdown`,
+        "success"
+      );
 
       await loadExportHistory();
     } catch (err) {
@@ -510,7 +947,8 @@ function ExportBackupSection() {
     <section className="settings-section">
       <h2>Export & Backup</h2>
       <p className="section-description">
-        Export your data for backup or migration. Exports include all snippets, categories, and metadata.
+        Export your data for backup or migration. Exports include all snippets,
+        categories, and metadata.
       </p>
 
       <div className="export-actions">
@@ -542,7 +980,8 @@ function ExportBackupSection() {
           className="history-toggle"
           onClick={() => setShowHistory(!showHistory)}
         >
-          {showHistory ? "Hide" : "Show"} Export History ({exportHistory.length})
+          {showHistory ? "Hide" : "Show"} Export History ({exportHistory.length}
+          )
         </button>
 
         {showHistory && exportHistory.length > 0 && (
@@ -579,14 +1018,14 @@ function ExportBackupSection() {
         <h3>Export Formats</h3>
         <div className="format-info">
           <div className="format-item">
-            <strong>JSON:</strong> Machine-readable format with complete data structure.
-            Includes all metadata, categories, tags, and version history.
-            Best for backup and data migration.
+            <strong>JSON:</strong> Machine-readable format with complete data
+            structure. Includes all metadata, categories, tags, and version
+            history. Best for backup and data migration.
           </div>
           <div className="format-item">
-            <strong>Markdown:</strong> Human-readable format optimized for reading.
-            Organized by categories with formatted content.
-            Best for documentation and sharing.
+            <strong>Markdown:</strong> Human-readable format optimized for
+            reading. Organized by categories with formatted content. Best for
+            documentation and sharing.
           </div>
         </div>
       </div>

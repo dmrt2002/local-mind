@@ -25,8 +25,8 @@ static CENTROID_CACHE: Lazy<Arc<Mutex<HashMap<i64, CategoryCentroid>>>> =
 
 /// Calculate centroid for a category (average of all snippet embeddings)
 pub async fn calculate_category_centroid(category_id: i64) -> Result<Option<CategoryCentroid>> {
-    // Get all snippets in this category
-    let snippets = sqlite::get_snippets_by_category(category_id, 10000, 0).await?;
+    // Get all snippets in this category (all content types)
+    let snippets = sqlite::get_snippets_by_category(category_id, 10000, 0, None).await?;
 
     if snippets.is_empty() {
         return Ok(None);
@@ -150,7 +150,7 @@ pub async fn categorize_snippet(
     };
 
     // Get all categories (root level and children)
-    let all_categories = sqlite::get_categories(None).await?;
+    let all_categories = sqlite::get_categories(None, None).await?;
 
     if all_categories.is_empty() {
         log::debug!("No categories exist yet");

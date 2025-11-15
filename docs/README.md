@@ -20,6 +20,7 @@ Welcome to the LocalMind documentation! This directory contains all project docu
 ### `/features` - Feature Documentation
 - **SEARCH_FEATURES.md** - Search functionality overview
 - **SEARCH_TECHNIQUES.md** - Advanced search techniques
+- **MONITORING_GUIDE.md** - Terminal and screenshot monitoring guide
 
 ### `/archive` - Historical Documentation
 Contains outdated status reports and implementation notes for reference.
@@ -30,6 +31,7 @@ Contains outdated status reports and implementation notes for reference.
 - **USER_FLOW_DOCUMENTATION.md** - User interface and flow documentation
 - **TESTING_GUIDE.md** - Testing procedures and guidelines
 - **FEATURE_ROADMAP.md** - Feature planning and implementation roadmap
+- **SCREENSHOT_AND_TERMINAL_IMPLEMENTATION.md** - In-depth implementation guide for monitoring features
 
 ## 🚀 Quick Links
 
@@ -37,6 +39,7 @@ Contains outdated status reports and implementation notes for reference.
 - [Technical Docs](TECHNICAL_DOCUMENTATION.md) - Full technical reference
 - [Testing Guide](TESTING_GUIDE.md) - How to test the application
 - [Feature Roadmap](FEATURE_ROADMAP.md) - Feature planning and priorities
+- [Monitoring Implementation](SCREENSHOT_AND_TERMINAL_IMPLEMENTATION.md) - Deep-dive technical guide
 
 ## 📖 For New Developers
 
@@ -50,3 +53,12 @@ Contains outdated status reports and implementation notes for reference.
 1. Review [FEATURE_ROADMAP.md](FEATURE_ROADMAP.md) for prioritized features
 2. Check [USER_FLOW_DOCUMENTATION.md](USER_FLOW_DOCUMENTATION.md) for pain points
 3. See current implementation phases and success metrics
+
+## 🔧 For Implementation Deep Dives
+
+1. [SCREENSHOT_AND_TERMINAL_IMPLEMENTATION.md](SCREENSHOT_AND_TERMINAL_IMPLEMENTATION.md) - Complete technical implementation guide for monitoring features
+   - Architecture diagrams and data flows
+   - Code implementation details with examples
+   - Database schema and migrations
+   - User flows and processing pipelines
+   - Performance characteristics and testing strategy

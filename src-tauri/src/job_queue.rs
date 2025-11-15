@@ -136,7 +136,52 @@ impl PersistentJobQueue {
 
     /// Push a new job to the queue
     pub async fn push(&self, snippet_id: i64, content: String, summary: Option<String>, priority: Priority) -> Result<()> {
+        // Check if embedding already exists before queueing
+        match crate::db::lancedb::has_embedding(snippet_id).await {
+            Ok(true) => {
+                log::info!("⏭️  Embedding already exists for snippet {}, skipping job queue", snippet_id);
+                // Mark any existing pending job as completed
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE job_queue
+                    SET status = 'completed', updated_at = ?
+                    WHERE snippet_id = ? AND status = 'pending'
+                    "#,
+                )
+                .bind(Utc::now().to_rfc3339())
+                .bind(snippet_id)
+                .execute(&self.pool)
+                .await;
+                return Ok(()); // Skip queueing
+            }
+            Ok(false) => {
+                // Embedding doesn't exist, proceed with queueing
+            }
+            Err(e) => {
+                log::warn!("⚠️  Failed to check embedding existence for snippet {}: {}, queueing anyway", snippet_id, e);
+                // Continue queueing even if check failed
+            }
+        }
+
         let now = Utc::now().to_rfc3339();
+
+        // Check if job already exists for this snippet
+        let existing_job: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT id FROM job_queue
+            WHERE snippet_id = ? AND status IN ('pending', 'running')
+            LIMIT 1
+            "#,
+        )
+        .bind(snippet_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to check for existing job")?;
+
+        if existing_job.is_some() {
+            log::info!("⏭️  Job already exists for snippet {}, skipping duplicate", snippet_id);
+            return Ok(()); // Skip creating duplicate job
+        }
 
         // Save to database immediately (for crash recovery)
         sqlx::query(
@@ -172,9 +217,12 @@ impl PersistentJobQueue {
     }
 
     /// Recover incomplete jobs on startup
+    /// This function never fails - it logs errors but always returns Ok(())
     pub async fn recover_on_startup(&mut self) -> Result<()> {
+        log::info!("🔄 [JOB_QUEUE] Starting job recovery on startup...");
+
         // Reset 'running' jobs to 'pending' (they were interrupted by crash)
-        sqlx::query(
+        match sqlx::query(
             r#"
             UPDATE job_queue 
             SET status = 'pending', updated_at = ?
@@ -184,60 +232,216 @@ impl PersistentJobQueue {
         .bind(Utc::now().to_rfc3339())
         .execute(&self.pool)
         .await
-        .context("Failed to reset running jobs")?;
-
-        // Load all pending jobs and reschedule them
-        // We need to attach the main database to access summaries
-        let main_db_path = crate::db::sqlite::get_db_path()
-            .context("Failed to get main database path")?;
-
-        // Attach main database
-        sqlx::query(&format!("ATTACH DATABASE '{}' AS main_db", main_db_path.display()))
-            .execute(&self.pool)
-            .await
-            .context("Failed to attach main database")?;
-
-        let rows = sqlx::query(
-            r#"
-            SELECT jq.id, jq.snippet_id, jq.content, jq.priority, jq.status, jq.created_at, s.summary
-            FROM job_queue jq
-            LEFT JOIN main_db.snippets s ON jq.snippet_id = s.id
-            WHERE jq.status = 'pending'
-            ORDER BY jq.priority DESC, jq.created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed to fetch pending jobs")?;
-
-        // Detach main database
-        sqlx::query("DETACH DATABASE main_db")
-            .execute(&self.pool)
-            .await
-            .context("Failed to detach main database")?;
-
-        if !rows.is_empty() && self.worker_tx.is_none() {
-            self.start_worker()?;
+        {
+            Ok(result) => {
+                let count = result.rows_affected();
+                if count > 0 {
+                    log::info!("🔄 [JOB_QUEUE] Reset {} running jobs to pending", count);
+                }
+            }
+            Err(e) => {
+                log::warn!("⚠️  [JOB_QUEUE] Failed to reset running jobs: {}", e);
+                // Continue anyway - this is not critical
+            }
         }
 
-        for row in rows {
-            let job = Job {
-                id: Some(row.get(0)),
-                snippet_id: row.get(1),
-                content: row.get(2),
-                priority: match row.get::<i32, _>(3) {
-                    0 => Priority::Low,
-                    1 => Priority::Normal,
-                    _ => Priority::High,
-                },
-                status: JobStatus::Pending,
-                created_at: row.get(5),
-                summary: row.get(6),
-            };
-
-            if let Some(ref tx) = self.worker_tx {
-                let _ = tx.send(job).await;
+        // Load all pending jobs and reschedule them
+        // Try to get summaries from main database if available, but don't fail if it's not
+        let rows_result: Result<Vec<_>, _> = async {
+            match crate::db::sqlite::get_db_path() {
+                Ok(main_db_path) => {
+                    // Check if main database exists
+                    if !main_db_path.exists() {
+                        log::warn!("⚠️  [JOB_QUEUE] Main database not found at: {}, fetching jobs without summaries", main_db_path.display());
+                        // Fetch jobs without summaries
+                        sqlx::query(
+                            r#"
+                            SELECT id, snippet_id, content, priority, status, created_at, NULL as summary
+                            FROM job_queue
+                            WHERE status = 'pending'
+                            ORDER BY priority DESC, created_at ASC
+                            "#,
+                        )
+                        .fetch_all(&self.pool)
+                        .await
+                        .context("Failed to fetch pending jobs")
+                    } else {
+                        // Try to attach main database and get summaries
+                        let main_db_path_abs = main_db_path.canonicalize()
+                            .unwrap_or_else(|_| main_db_path.clone());
+                        let attach_sql = format!("ATTACH DATABASE '{}' AS main_db", main_db_path_abs.display().to_string().replace('\\', "/"));
+                        
+                        match sqlx::query(&attach_sql).execute(&self.pool).await {
+                            Ok(_) => {
+                                log::info!("✅ [JOB_QUEUE] Attached main database for job recovery");
+                                
+                                // Check if snippets table exists in main_db before querying
+                                let table_exists: Option<i64> = sqlx::query_scalar(
+                                    r#"
+                                    SELECT COUNT(*) FROM main_db.sqlite_master 
+                                    WHERE type='table' AND name='snippets'
+                                    "#,
+                                )
+                                .fetch_optional(&self.pool)
+                                .await
+                                .ok()
+                                .flatten();
+                                
+                                let result = if table_exists == Some(1) {
+                                    // Table exists, try to get summaries
+                                    sqlx::query(
+                                        r#"
+                                        SELECT jq.id, jq.snippet_id, jq.content, jq.priority, jq.status, jq.created_at, s.summary
+                                        FROM job_queue jq
+                                        LEFT JOIN main_db.snippets s ON jq.snippet_id = s.id
+                                        WHERE jq.status = 'pending'
+                                        ORDER BY jq.priority DESC, jq.created_at ASC
+                                        "#,
+                                    )
+                                    .fetch_all(&self.pool)
+                                    .await
+                                } else {
+                                    log::warn!("⚠️  [JOB_QUEUE] snippets table not found in main_db, fetching jobs without summaries");
+                                    // Table doesn't exist, fetch without summaries
+                                    sqlx::query(
+                                        r#"
+                                        SELECT id, snippet_id, content, priority, status, created_at, NULL as summary
+                                        FROM job_queue
+                                        WHERE status = 'pending'
+                                        ORDER BY priority DESC, created_at ASC
+                                        "#,
+                                    )
+                                    .fetch_all(&self.pool)
+                                    .await
+                                };
+                                
+                                // Always try to detach, even if query failed
+                                let _ = sqlx::query("DETACH DATABASE main_db")
+                                    .execute(&self.pool)
+                                    .await;
+                                
+                                result.context("Failed to fetch pending jobs")
+                            }
+                            Err(e) => {
+                                log::warn!("⚠️  [JOB_QUEUE] Failed to attach main database: {}, fetching jobs without summaries", e);
+                                // Fetch jobs without summaries as fallback
+                                sqlx::query(
+                                    r#"
+                                    SELECT id, snippet_id, content, priority, status, created_at, NULL as summary
+                                    FROM job_queue
+                                    WHERE status = 'pending'
+                                    ORDER BY priority DESC, created_at ASC
+                                    "#,
+                                )
+                                .fetch_all(&self.pool)
+                                .await
+                                .context("Failed to fetch pending jobs")
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("⚠️  [JOB_QUEUE] Failed to get main database path: {}, fetching jobs without summaries", e);
+                    // Fetch jobs without summaries as fallback
+                    sqlx::query(
+                        r#"
+                        SELECT id, snippet_id, content, priority, status, created_at, NULL as summary
+                        FROM job_queue
+                        WHERE status = 'pending'
+                        ORDER BY priority DESC, created_at ASC
+                        "#,
+                    )
+                    .fetch_all(&self.pool)
+                    .await
+                    .context("Failed to fetch pending jobs")
+                }
             }
+        }.await;
+
+        let rows = match rows_result {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::error!("❌ [JOB_QUEUE] Failed to fetch pending jobs: {}", e);
+                log::error!("❌ [JOB_QUEUE] Error details: {:?}", e);
+                log::warn!("⚠️  [JOB_QUEUE] Continuing without job recovery - this is non-critical");
+                // Return empty vec - no jobs to recover
+                Vec::new()
+            }
+        };
+
+        let job_count = rows.len();
+        if job_count > 0 {
+            log::info!("📋 [JOB_QUEUE] Found {} pending jobs to recover", job_count);
+            
+            if self.worker_tx.is_none() {
+                if let Err(e) = self.start_worker() {
+                    log::error!("❌ [JOB_QUEUE] Failed to start worker: {}", e);
+                    log::warn!("⚠️  [JOB_QUEUE] Jobs will not be processed until worker is started");
+                    return Ok(()); // Don't fail, just return
+                }
+            }
+
+            for row in rows {
+                let job = match (|| -> Result<Job> {
+                    Ok(Job {
+                        id: Some(row.get(0)),
+                        snippet_id: row.get(1),
+                        content: row.get(2),
+                        priority: match row.get::<i32, _>(3) {
+                            0 => Priority::Low,
+                            1 => Priority::Normal,
+                            _ => Priority::High,
+                        },
+                        status: JobStatus::Pending,
+                        created_at: row.get(5),
+                        summary: row.get(6),
+                    })
+                })() {
+                    Ok(job) => job,
+                    Err(e) => {
+                        log::error!("❌ [JOB_QUEUE] Failed to parse job row: {}", e);
+                        continue; // Skip this job
+                    }
+                };
+
+                // Check if embedding already exists before re-queuing
+                match crate::db::lancedb::has_embedding(job.snippet_id).await {
+                    Ok(true) => {
+                        log::info!("⏭️  [JOB_QUEUE] Embedding already exists for snippet {}, marking job as completed", job.snippet_id);
+                        // Mark job as completed since embedding already exists
+                        let _ = sqlx::query(
+                            r#"
+                            UPDATE job_queue
+                            SET status = 'completed', updated_at = ?
+                            WHERE snippet_id = ?
+                            "#,
+                        )
+                        .bind(Utc::now().to_rfc3339())
+                        .bind(job.snippet_id)
+                        .execute(&self.pool)
+                        .await;
+                        continue; // Skip to next job
+                    }
+                    Ok(false) => {
+                        // Embedding doesn't exist, proceed with re-queuing
+                    }
+                    Err(e) => {
+                        log::warn!("⚠️  [JOB_QUEUE] Failed to check embedding for snippet {}: {}, re-queuing anyway", job.snippet_id, e);
+                        // Continue re-queuing even if check failed
+                    }
+                }
+
+                if let Some(ref tx) = self.worker_tx {
+                    if let Err(e) = tx.send(job).await {
+                        log::error!("❌ [JOB_QUEUE] Failed to send job to worker: {}", e);
+                        // Continue with other jobs
+                    }
+                }
+            }
+            
+            log::info!("✅ [JOB_QUEUE] Successfully recovered {} jobs", job_count);
+        } else {
+            log::info!("✅ [JOB_QUEUE] No pending jobs to recover");
         }
 
         Ok(())
@@ -308,7 +512,7 @@ async fn try_llm_categorization(snippet_id: i64, content: &str, pool: &SqlitePoo
     }
 
     // Get existing categories (pass None to get all categories)
-    let categories = match crate::db::sqlite::get_categories(None).await {
+    let categories = match crate::db::sqlite::get_categories(None, None).await {
         Ok(cats) => cats,
         Err(e) => {
             log::warn!("Failed to get categories for LLM: {}", e);
@@ -328,8 +532,41 @@ async fn try_llm_categorization(snippet_id: i64, content: &str, pool: &SqlitePoo
     println!("🤖 Using LLM for smart categorization...");
     log::info!("🤖 Using LLM for categorization of snippet {}", snippet_id);
 
-    // Call LLM categorization
-    let decision = match categorization::categorize_with_llm(&model, content, &categories).await {
+    // Get snippet type and source information for content-aware categorization
+    let row_result = sqlx::query(
+        "SELECT type, website_url, website_title FROM snippets WHERE id = ?"
+    )
+    .bind(snippet_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (content_type, website_url, website_title) = if let Some(row) = row_result {
+        (
+            row.try_get::<Option<String>, _>(0).ok().flatten(),
+            row.try_get::<Option<String>, _>(1).ok().flatten(),
+            row.try_get::<Option<String>, _>(2).ok().flatten(),
+        )
+    } else {
+        (None, None, None)
+    };
+
+    log::info!("📋 Snippet {} categorization context:", snippet_id);
+    log::info!("   Content Type: {:?}", content_type);
+    log::info!("   Website URL: {:?}", website_url);
+    log::info!("   Website Title: {:?}", website_title);
+    log::info!("   Content Preview: {}", content.chars().take(150).collect::<String>());
+
+    // Call LLM categorization with content type and source information
+    let decision = match categorization::categorize_with_llm(
+        &model, 
+        content, 
+        &categories, 
+        content_type.as_deref(),
+        website_url.as_deref(),
+        website_title.as_deref(),
+    ).await {
         Ok(d) => d,
         Err(e) => {
             log::warn!("LLM categorization failed: {}", e);
@@ -340,21 +577,133 @@ async fn try_llm_categorization(snippet_id: i64, content: &str, pool: &SqlitePoo
 
     println!("🤖 LLM decision: {:?} category '{}' (confidence: {:.2})",
              decision.action, decision.category_name, decision.confidence);
-    log::info!("LLM categorization result: {:?}", decision);
+    log::info!("✅ LLM categorization result: {:?}", decision);
+    
+    // CRITICAL: Final validation check - if category name is still invalid after validation, fall back
+    let category_trimmed = decision.category_name.trim();
+    let category_lower = category_trimmed.to_lowercase();
+    let word_count = category_trimmed.split_whitespace().count();
+    let has_letter = category_trimmed.chars().any(|c| c.is_alphabetic());
+    let is_all_uppercase = category_trimmed.chars().all(|c| !c.is_lowercase());
+    let is_alphanumeric_code = category_trimmed.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '-')
+        && category_trimmed.chars().filter(|c| c.is_alphabetic()).count() <= 3
+        && category_trimmed.chars().any(|c| c.is_numeric());
+    
+    let valid_single_words = [
+        "documentation", "commands", "code", "notes", "links", "research",
+        "news", "articles", "personal", "ideas", "shopping", "social",
+    ];
+    let is_valid_single_word = word_count == 1 && valid_single_words.contains(&category_lower.as_str());
+    
+    let is_still_invalid = category_trimmed.len() < 3
+        || (is_all_uppercase && category_trimmed.len() < 5 && category_trimmed.len() >= 2)
+        || (word_count < 2 && !is_valid_single_word)
+        || is_alphanumeric_code
+        || !has_letter;
+    
+    if is_still_invalid {
+        log::error!(
+            "❌ CRITICAL: LLM returned invalid category name '{}' even after validation - falling back to semantic similarity",
+            decision.category_name
+        );
+        println!("⚠️  LLM returned invalid category name '{}' - falling back to semantic similarity", decision.category_name);
+        return None;
+    }
+    
+    // Special logging for "Documentation" category to help debug misclassifications
+    let category_lower = decision.category_name.to_lowercase();
+    if category_lower.contains("documentation") {
+        log::warn!("📄 LLM chose 'Documentation' category - verifying this is correct:");
+        log::warn!("   Content type: {:?}", content_type);
+        log::warn!("   Website URL: {:?}", website_url);
+        log::warn!("   Website Title: {:?}", website_title);
+        log::warn!("   Reasoning: {}", decision.reasoning);
+        log::warn!("   Content preview: {}", content.chars().take(200).collect::<String>());
+        
+        // Check for business keywords
+        let content_lower = content.to_lowercase();
+        let business_indicators = [
+            ("case study", content_lower.contains("case study")),
+            ("partnership", content_lower.contains("partnership")),
+            ("harnesses", content_lower.contains("harnesses")),
+            ("transformed", content_lower.contains("transformed")),
+            ("discover", content_lower.contains("discover")),
+            ("company name", content_lower.split_whitespace().any(|w| {
+                w.len() > 2 && w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+            })),
+        ];
+        
+        let found_indicators: Vec<_> = business_indicators.iter()
+            .filter(|(_, found)| *found)
+            .map(|(name, _)| name)
+            .collect();
+        
+        if !found_indicators.is_empty() {
+            log::warn!("   ⚠️  WARNING: Found business indicators: {:?}", found_indicators);
+            log::warn!("   This may be incorrectly categorized as Documentation!");
+        } else {
+            log::info!("   ✓ No obvious business indicators found - Documentation category may be correct");
+        }
+    }
+
+    // FINAL SAFETY CHECK: Verify UseExisting category actually exists
+    // (This should have been caught by validate_category_decision, but double-check here)
+    if matches!(decision.action, categorization::CategoryAction::UseExisting) {
+        let category_name_lower = decision.category_name.to_lowercase();
+        let category_exists = categories
+            .iter()
+            .any(|c| c.name.to_lowercase() == category_name_lower);
+        
+        if !category_exists {
+            log::error!(
+                "CRITICAL: LLM suggested UseExisting for '{}' but validation failed - category doesn't exist! Available categories: {}",
+                decision.category_name,
+                categories.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+            );
+            // This should not happen if validate_category_decision worked correctly
+            // But if it does, fall back to semantic similarity
+            println!("⚠️  LLM validation error: category '{}' doesn't exist, falling back to semantic similarity", decision.category_name);
+            return None;
+        }
+    }
 
     let reasoning = decision.reasoning.clone();
 
     // Handle LLM decision
     match decision.action {
         categorization::CategoryAction::UseExisting => {
-            // Find the category by name (case-insensitive)
+            // Find the category by name (case-insensitive exact match first)
             let category_name_lower = decision.category_name.to_lowercase();
             if let Some(category) = categories.iter().find(|c| c.name.to_lowercase() == category_name_lower) {
                 println!("✅ LLM matched existing category: {} (ID: {})", category.name, category.id);
                 Some((category.id, decision.confidence, "llm".to_string(), reasoning))
             } else {
-                log::warn!("LLM suggested category '{}' but it doesn't exist", decision.category_name);
-                None
+                // Try fuzzy matching when exact match fails
+                let mut best_match: Option<(&crate::db::sqlite::Category, f32)> = None;
+                for cat in categories.iter() {
+                    let similarity = categorization::string_similarity(&decision.category_name, &cat.name);
+                    if similarity > 0.80 {
+                        // Found a similar category
+                        if let Some((_, best_sim)) = best_match {
+                            if similarity > best_sim {
+                                best_match = Some((cat, similarity));
+                            }
+                        } else {
+                            best_match = Some((cat, similarity));
+                        }
+                    }
+                }
+                
+                if let Some((category, similarity)) = best_match {
+                    println!("✅ LLM fuzzy-matched existing category: {} (ID: {}, similarity: {:.2})", 
+                             category.name, category.id, similarity);
+                    log::info!("LLM suggested '{}' but matched '{}' via fuzzy matching (similarity: {:.2})", 
+                               decision.category_name, category.name, similarity);
+                    Some((category.id, decision.confidence, "llm_fuzzy".to_string(), reasoning))
+                } else {
+                    log::warn!("LLM suggested category '{}' but it doesn't exist (no fuzzy match found)", decision.category_name);
+                    None
+                }
             }
         }
         categorization::CategoryAction::CreateNew => {
@@ -385,32 +734,65 @@ async fn try_llm_categorization(snippet_id: i64, content: &str, pool: &SqlitePoo
                 None
             };
 
-            // Check if category with this name already exists (case-insensitive)
-            match crate::db::sqlite::get_categories(Some(parent_id)).await {
+            // Check if category with this name already exists (case-insensitive, normalized)
+            match crate::db::sqlite::get_categories(Some(parent_id), None).await {
                 Ok(existing) => {
-                    let category_name_lower = decision.category_name.to_lowercase();
-                    if let Some(cat) = existing.iter().find(|c| c.name.to_lowercase() == category_name_lower) {
+                    // Normalize category name for comparison (lowercase, normalize spaces/underscores)
+                    let normalize_name = |name: &str| -> String {
+                        name.to_lowercase()
+                            .replace("_", " ")
+                            .replace("-", " ")
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string()
+                    };
+                    
+                    let normalized_new = normalize_name(&decision.category_name);
+                    
+                    // Check for exact match after normalization
+                    if let Some(cat) = existing.iter().find(|c| normalize_name(&c.name) == normalized_new) {
                         println!("✅ Category already exists: {} (ID: {})", cat.name, cat.id);
-                        log::info!("LLM wanted to create '{}' but '{}' already exists (case-insensitive match)",
-                                   decision.category_name, cat.name);
+                        log::warn!("⚠️  DUPLICATE PREVENTED: LLM wanted to create '{}' but '{}' already exists (normalized match: '{}')",
+                                   decision.category_name, cat.name, normalized_new);
                         Some((cat.id, decision.confidence, "llm".to_string(), reasoning))
                     } else {
-                        // Create new category
-                        match crate::db::sqlite::create_category(
-                            decision.category_name.clone(),
-                            parent_id,
-                            decision.emoji.clone()
-                        ).await {
-                            Ok(new_id) => {
-                                println!("✅ Created new category (LLM): {} {} (ID: {})",
-                                         decision.emoji.as_deref().unwrap_or("📁"),
-                                         decision.category_name,
-                                         new_id);
-                                Some((new_id, decision.confidence, "llm".to_string(), reasoning))
+                        // Check for fuzzy match (similarity > 0.85)
+                        let mut found_duplicate = None;
+                        for cat in existing.iter() {
+                            let normalized_existing = normalize_name(&cat.name);
+                            let similarity = categorization::string_similarity(&normalized_new, &normalized_existing);
+                            if similarity > 0.85 && similarity < 1.0 {
+                                found_duplicate = Some((cat, similarity));
+                                break;
                             }
-                            Err(e) => {
-                                log::error!("Failed to create LLM-suggested category: {}", e);
-                                None
+                        }
+                        
+                        if let Some((cat, similarity)) = found_duplicate {
+                            println!("✅ Similar category already exists: {} (ID: {}, similarity: {:.0}%)", 
+                                     cat.name, cat.id, similarity * 100.0);
+                            log::warn!("⚠️  SIMILAR CATEGORY PREVENTED: LLM wanted to create '{}' but '{}' already exists ({:.0}% similar)",
+                                       decision.category_name, cat.name, similarity * 100.0);
+                            Some((cat.id, decision.confidence, "llm".to_string(), reasoning))
+                        } else {
+                            // Create new category
+                            match crate::db::sqlite::create_category(
+                                decision.category_name.clone(),
+                                parent_id,
+                                decision.emoji.clone()
+                            ).await {
+                                Ok(new_id) => {
+                                    println!("✅ Created new category (LLM): {} {} (ID: {})",
+                                             decision.emoji.as_deref().unwrap_or("📁"),
+                                             decision.category_name,
+                                             new_id);
+                                    Some((new_id, decision.confidence, "llm".to_string(), reasoning))
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to create LLM-suggested category: {}", e);
+                                    None
+                                }
                             }
                         }
                     }
@@ -479,6 +861,36 @@ async fn process_batch(
     println!("🔄 Processing batch of {} embedding jobs", batch_size);
 
     for mut job in batch.drain(..) {
+        // Check if embedding already exists before processing
+        match crate::db::lancedb::has_embedding(job.snippet_id).await {
+            Ok(true) => {
+                log::info!("⏭️  Embedding already exists for snippet {}, skipping job", job.snippet_id);
+                println!("⏭️  Embedding already exists for snippet {}, marking as completed", job.snippet_id);
+                
+                // Mark job as completed since embedding already exists
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE job_queue
+                    SET status = 'completed', updated_at = ?
+                    WHERE snippet_id = ?
+                    "#,
+                )
+                .bind(Utc::now().to_rfc3339())
+                .bind(job.snippet_id)
+                .execute(pool)
+                .await;
+                
+                continue; // Skip to next job
+            }
+            Ok(false) => {
+                // Embedding doesn't exist, proceed with processing
+            }
+            Err(e) => {
+                log::warn!("⚠️  Failed to check embedding existence for snippet {}: {}, proceeding anyway", job.snippet_id, e);
+                // Continue processing even if check failed
+            }
+        }
+
         // Mark job as running
         let _ = sqlx::query(
             r#"
@@ -595,9 +1007,33 @@ async fn process_batch(
                                 job.snippet_id
                             );
 
-                            // Auto-create category based on content
-                            use crate::embedding::category_suggestion;
-                            let (category_name, emoji) = category_suggestion::suggest_category_from_content(&job.content);
+                            // IMPORTANT: For commands, try pattern matching FIRST before keyword suggestion
+                            // Get snippet type to check if it's a command
+                            let snippet_type: Option<String> = sqlx::query_scalar(
+                                "SELECT type FROM snippets WHERE id = ?"
+                            )
+                            .bind(job.snippet_id)
+                            .fetch_optional(pool)
+                            .await
+                            .unwrap_or(None);
+
+                            let (category_name, emoji) = if snippet_type.as_deref() == Some("command") {
+                                // Try canonical pattern matching for commands
+                                use crate::inference::categorization;
+                                if let Some(canonical) = categorization::get_canonical_category_info(&job.content) {
+                                    println!("🎯 Pattern-matched canonical category: {} {}", canonical.emoji, canonical.name);
+                                    log::info!("Pattern-matched canonical category '{}' for command snippet {}", canonical.name, job.snippet_id);
+                                    (canonical.name.to_string(), canonical.emoji.to_string())
+                                } else {
+                                    // Fall back to keyword suggestion for non-canonical commands
+                                    use crate::embedding::category_suggestion;
+                                    category_suggestion::suggest_category_from_content(&job.content)
+                                }
+                            } else {
+                                // For non-command content, use keyword suggestion
+                                use crate::embedding::category_suggestion;
+                                category_suggestion::suggest_category_from_content(&job.content)
+                            };
 
                             println!("🆕 Creating new category: {} {}", emoji, category_name);
 
@@ -613,16 +1049,22 @@ async fn process_batch(
 
                             // Determine parent_id based on app hierarchy
                             let parent_id = if let Some(ref app) = source_app {
-                                // Get or create app folder
-                                match crate::db::sqlite::get_or_create_app_folder(app).await {
-                                    Ok(folder_id) => {
-                                        println!("📁 Using app folder '{}' (ID: {})", app, folder_id);
-                                        Some(folder_id)
-                                    }
-                                    Err(e) => {
-                                        println!("⚠️  Failed to get/create app folder: {}", e);
-                                        log::warn!("Failed to get/create app folder: {}", e);
-                                        None // Fall back to root level
+                                // Validate app name is not empty before creating folder
+                                if app.trim().is_empty() {
+                                    log::warn!("Source app is empty, skipping app folder creation");
+                                    None
+                                } else {
+                                    // Get or create app folder
+                                    match crate::db::sqlite::get_or_create_app_folder(app).await {
+                                        Ok(folder_id) => {
+                                            println!("📁 Using app folder '{}' (ID: {})", app, folder_id);
+                                            Some(folder_id)
+                                        }
+                                        Err(e) => {
+                                            println!("⚠️  Failed to get/create app folder: {}", e);
+                                            log::warn!("Failed to get/create app folder: {}", e);
+                                            None // Fall back to root level
+                                        }
                                     }
                                 }
                             } else {
@@ -630,7 +1072,7 @@ async fn process_batch(
                             };
 
                             // Check if category already exists with this name under the same parent
-                            match crate::db::sqlite::get_categories(Some(parent_id)).await {
+                            match crate::db::sqlite::get_categories(Some(parent_id), None).await {
                                 Ok(existing_categories) => {
                                     let existing = existing_categories.iter().find(|c| c.name == category_name);
 

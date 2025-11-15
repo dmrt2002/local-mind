@@ -9,6 +9,7 @@ use anyhow::Result;
 use chrono::DateTime;
 use log;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use std::time::Instant;
 use tauri::{Manager, State};
 
@@ -43,6 +44,13 @@ pub struct SnippetJson {
     pub updated_at: Option<String>,
     pub source_app: Option<String>,
     pub metadata: Option<String>,
+    #[serde(rename = "type")]
+    pub content_type: Option<String>,
+    pub file_path: Option<String>,
+    pub working_directory: Option<String>,
+    pub exit_code: Option<i32>,
+    pub website_url: Option<String>,
+    pub website_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +281,12 @@ pub async fn get_snippet(id: i64) -> Result<SnippetJson, String> {
         updated_at: snippet.updated_at.map(|dt| dt.to_rfc3339()),
         source_app: snippet.source_app,
         metadata: snippet.metadata,
+        content_type: snippet.content_type,
+        file_path: snippet.file_path,
+        working_directory: snippet.working_directory,
+        exit_code: snippet.exit_code,
+        website_url: snippet.website_url,
+        website_title: snippet.website_title,
     })
 }
 
@@ -490,6 +504,7 @@ pub async fn create_category(request: CreateCategoryRequest) -> Result<i64, Stri
 pub async fn get_categories(
     parent_id: Option<i64>,
     include_counts: bool,
+    content_type: Option<String>,
 ) -> Result<Vec<CategoryJson>, String> {
     // If parent_id is provided, get children of that parent
     // If parent_id is None, get root categories (parent_id IS NULL)
@@ -499,14 +514,23 @@ pub async fn get_categories(
         Some(None) // Get root categories
     };
 
-    let categories = sqlite::get_categories(filter)
+    // Convert "all" to None for backend processing
+    let filter_type = content_type.and_then(|t| {
+        if t == "all" {
+            None
+        } else {
+            Some(t)
+        }
+    });
+
+    let categories = sqlite::get_categories(filter, filter_type.clone())
         .await
         .map_err(|e| format!("Failed to get categories: {}", e))?;
 
     let mut result = Vec::new();
     for cat in categories {
         let snippet_count = if include_counts {
-            sqlite::get_category_snippet_count(cat.id)
+            sqlite::get_category_snippet_count(cat.id, filter_type.clone())
                 .await
                 .ok()
         } else {
@@ -528,8 +552,8 @@ pub async fn get_categories(
 
 /// Get all root categories (for initial tree load)
 #[tauri::command]
-pub async fn get_root_categories(include_counts: bool) -> Result<Vec<CategoryJson>, String> {
-    get_categories(None, include_counts).await
+pub async fn get_root_categories(include_counts: bool, content_type: Option<String>) -> Result<Vec<CategoryJson>, String> {
+    get_categories(None, include_counts, content_type).await
 }
 
 /// Get child categories of a parent
@@ -537,8 +561,9 @@ pub async fn get_root_categories(include_counts: bool) -> Result<Vec<CategoryJso
 pub async fn get_child_categories(
     parent_id: i64,
     include_counts: bool,
+    content_type: Option<String>,
 ) -> Result<Vec<CategoryJson>, String> {
-    get_categories(Some(parent_id), include_counts).await
+    get_categories(Some(parent_id), include_counts, content_type).await
 }
 
 /// Update category name and/or emoji
@@ -555,6 +580,55 @@ pub async fn delete_category(id: i64) -> Result<(), String> {
     sqlite::delete_category(id)
         .await
         .map_err(|e| format!("Failed to delete category: {}", e))
+}
+
+/// Delete all data (snippets, commands, screenshots, categories, embeddings)
+#[tauri::command]
+pub async fn delete_all_data(app: tauri::AppHandle) -> Result<(), String> {
+    sqlite::delete_all_data()
+        .await
+        .map_err(|e| format!("Failed to delete all data: {}", e))?;
+
+    // After deleting all data, check if screenshot monitoring is enabled
+    // and trigger a rescan to pick up existing screenshot files
+    log::info!("🔄 Checking for orphaned screenshots after data deletion...");
+
+    let pool = sqlite::get_pool()
+        .await
+        .map_err(|e| format!("Failed to get database pool: {}", e))?;
+
+    let settings = crate::settings::load_settings(&pool)
+        .await
+        .map_err(|e| format!("Failed to load settings: {}", e))?;
+
+    if settings.screenshot_monitoring_enabled && settings.screenshot_ocr_enabled {
+        log::info!("📸 Screenshot monitoring is enabled, triggering rescan...");
+
+        // Get job queue and clone it before spawning
+        let job_queue = app.state::<std::sync::Arc<crate::job_queue::PersistentJobQueue>>();
+        let job_queue_clone = job_queue.inner().clone();
+
+        tokio::spawn(async move {
+            use crate::monitors::screenshots;
+
+            // Wait 2 seconds for database operations to settle
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            match screenshots::rescan_existing_screenshots(job_queue_clone).await {
+                Ok((total, processed, skipped)) => {
+                    log::info!(
+                        "✅ Auto-rescan after deletion: {} total files, {} processed, {} skipped",
+                        total, processed, skipped
+                    );
+                }
+                Err(e) => {
+                    log::error!("❌ Auto-rescan after deletion failed: {}", e);
+                }
+            }
+        });
+    }
+
+    Ok(())
 }
 
 /// Assign a snippet to a category (manual or automatic)
@@ -578,8 +652,9 @@ pub async fn get_snippets_by_category(
     category_id: i64,
     limit: i64,
     offset: i64,
+    content_type: Option<String>,
 ) -> Result<Vec<SnippetJson>, String> {
-    let snippets = sqlite::get_snippets_by_category(category_id, limit, offset)
+    let snippets = sqlite::get_snippets_by_category(category_id, limit, offset, content_type)
         .await
         .map_err(|e| format!("Failed to get snippets for category: {}", e))?;
 
@@ -593,6 +668,12 @@ pub async fn get_snippets_by_category(
             updated_at: s.updated_at.map(|dt| dt.to_rfc3339()),
             source_app: s.source_app,
             metadata: s.metadata,
+            content_type: s.content_type,
+            file_path: s.file_path,
+            working_directory: s.working_directory,
+            exit_code: s.exit_code,
+            website_url: s.website_url,
+            website_title: s.website_title,
         })
         .collect())
 }
@@ -605,6 +686,14 @@ pub async fn get_snippet_category(snippet_id: i64) -> Result<Option<i64>, String
         Ok(None) => Ok(None),
         Err(e) => Err(format!("Failed to get snippet category: {}", e)),
     }
+}
+
+/// Get categorization reasoning for a snippet
+#[tauri::command]
+pub async fn get_categorization_reasoning(snippet_id: i64) -> Result<Option<sqlite::CategorizationReasoning>, String> {
+    sqlite::get_categorization_reasoning(snippet_id)
+        .await
+        .map_err(|e| format!("Failed to get categorization reasoning: {}", e))
 }
 
 // ============================================================================
@@ -1068,6 +1157,17 @@ pub async fn update_all_content_hashes() -> Result<usize, String> {
         .map_err(|e| format!("Failed to update hashes: {}", e))
 }
 
+#[tauri::command]
+pub async fn recalculate_command_hashes() -> Result<usize, String> {
+    let pool = sqlite::get_pool()
+        .await
+        .map_err(|e| format!("Failed to get database pool: {}", e))?;
+
+    dedup::recalculate_command_hashes(&pool)
+        .await
+        .map_err(|e| format!("Failed to recalculate command hashes: {}", e))
+}
+
 // Smart Suggestions Commands
 
 #[tauri::command]
@@ -1097,4 +1197,279 @@ pub async fn dismiss_suggestion(suggestion_id: String) -> Result<(), String> {
     suggestions::dismiss_suggestion(&suggestion_id)
         .await
         .map_err(|e| format!("Failed to dismiss suggestion: {}", e))
+}
+
+// Terminal Monitoring Commands
+
+use crate::monitors::shell_hook;
+
+#[tauri::command]
+pub fn detect_shell() -> Result<String, String> {
+    let shell = shell_hook::detect_shell()
+        .map_err(|e| format!("Failed to detect shell: {}", e))?;
+    Ok(shell.as_str().to_string())
+}
+
+#[tauri::command]
+pub fn install_shell_hooks() -> Result<String, String> {
+    let shell = shell_hook::detect_shell()
+        .map_err(|e| format!("Failed to detect shell: {}", e))?;
+
+    shell_hook::install_hooks(shell)
+        .map_err(|e| format!("Failed to install hooks: {}", e))
+}
+
+#[tauri::command]
+pub fn uninstall_shell_hooks() -> Result<String, String> {
+    let shell = shell_hook::detect_shell()
+        .map_err(|e| format!("Failed to detect shell: {}", e))?;
+
+    shell_hook::uninstall_hooks(shell)
+        .map_err(|e| format!("Failed to uninstall hooks: {}", e))
+}
+
+#[tauri::command]
+pub fn are_shell_hooks_installed() -> Result<bool, String> {
+    let shell = shell_hook::detect_shell()
+        .map_err(|e| format!("Failed to detect shell: {}", e))?;
+
+    shell_hook::are_hooks_installed(shell)
+        .map_err(|e| format!("Failed to check hooks: {}", e))
+}
+
+#[tauri::command]
+pub fn get_terminal_log_path() -> Result<String, String> {
+    shell_hook::get_terminal_log_path()
+        .map(|p| p.display().to_string())
+        .map_err(|e| format!("Failed to get log path: {}", e))
+}
+
+// Screenshot Monitoring Commands
+
+use crate::monitors::screenshots;
+use crate::processing::{ocr, vision};
+
+#[tauri::command]
+pub fn get_default_screenshot_dir() -> Result<String, String> {
+    screenshots::get_default_screenshot_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| format!("Failed to get screenshot directory: {}", e))
+}
+
+#[tauri::command]
+pub fn is_tesseract_installed() -> bool {
+    ocr::is_tesseract_installed()
+}
+
+#[tauri::command]
+pub fn is_apple_vision_available() -> bool {
+    use crate::processing::ocr_apple;
+    ocr_apple::is_apple_vision_available()
+}
+
+#[tauri::command]
+pub fn get_apple_architecture() -> String {
+    use crate::processing::ocr_apple;
+    ocr_apple::get_architecture_info()
+}
+
+#[tauri::command]
+pub fn is_florence2_downloaded() -> bool {
+    vision::is_florence2_downloaded()
+}
+
+#[tauri::command]
+pub async fn download_florence2_model() -> Result<String, String> {
+    vision::download_florence2_model()
+        .await
+        .map(|_| "Florence-2 model directory created. See instructions for manual download.".to_string())
+        .map_err(|e| format!("Failed to setup Florence-2 model: {}", e))
+}
+
+#[tauri::command]
+pub async fn search_text_in_database(search_text: String) -> Result<serde_json::Value, String> {
+    use crate::db::sqlite;
+    
+    let pool = sqlite::get_pool().await
+        .map_err(|e| format!("Failed to get database pool: {}", e))?;
+    
+    // Search in summary field
+    let summary_results = sqlx::query(
+        r#"
+        SELECT id, summary, content, type, file_path
+        FROM snippets
+        WHERE summary LIKE ? OR summary = ?
+        LIMIT 10
+        "#
+    )
+    .bind(format!("%{}%", search_text))
+    .bind(&search_text)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search summary: {}", e))?;
+    
+    // Search in content field (check if in [Caption: ...] section)
+    let content_results = sqlx::query(
+        r#"
+        SELECT id, summary, content, type, file_path
+        FROM snippets
+        WHERE content LIKE ? OR content LIKE ?
+        LIMIT 10
+        "#
+    )
+    .bind(format!("%[Caption: {}%", search_text))
+    .bind(format!("%{}%", search_text))
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search content: {}", e))?;
+    
+    // Check if caption and ocr_text columns exist by trying to query them
+    let has_caption_column = sqlx::query(
+        r#"
+        SELECT name FROM pragma_table_info('snippets') WHERE name = 'caption'
+        "#
+    )
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some();
+    
+    let has_ocr_text_column = sqlx::query(
+        r#"
+        SELECT name FROM pragma_table_info('snippets') WHERE name = 'ocr_text'
+        "#
+    )
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some();
+    
+    // If caption column exists, search in it
+    let caption_results = if has_caption_column {
+        sqlx::query(
+            r#"
+            SELECT id, summary, content, type, file_path, caption
+            FROM snippets
+            WHERE caption LIKE ? OR caption = ?
+            LIMIT 10
+            "#
+        )
+        .bind(format!("%{}%", search_text))
+        .bind(&search_text)
+        .fetch_all(&pool)
+        .await
+        .ok()
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    
+    // If ocr_text column exists, search in it
+    let ocr_results = if has_ocr_text_column {
+        sqlx::query(
+            r#"
+            SELECT id, summary, content, type, file_path, ocr_text
+            FROM snippets
+            WHERE ocr_text LIKE ? OR ocr_text = ?
+            LIMIT 10
+            "#
+        )
+        .bind(format!("%{}%", search_text))
+        .bind(&search_text)
+        .fetch_all(&pool)
+        .await
+        .ok()
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    
+    // Format results
+    let mut summary_matches = Vec::new();
+    for row in summary_results {
+        summary_matches.push(serde_json::json!({
+            "id": row.get::<i64, _>(0),
+            "summary": row.get::<Option<String>, _>(1),
+            "content": row.get::<String, _>(2),
+            "type": row.get::<Option<String>, _>(3),
+            "file_path": row.get::<Option<String>, _>(4),
+            "field": "summary"
+        }));
+    }
+    
+    let mut content_matches = Vec::new();
+    for row in content_results {
+        let content: String = row.get(2);
+        let is_in_caption = content.contains(&format!("[Caption: {}", search_text)) || 
+                           content.contains(&format!("[Caption: {}]", search_text));
+        content_matches.push(serde_json::json!({
+            "id": row.get::<i64, _>(0),
+            "summary": row.get::<Option<String>, _>(1),
+            "content": row.get::<String, _>(2),
+            "type": row.get::<Option<String>, _>(3),
+            "file_path": row.get::<Option<String>, _>(4),
+            "field": "content",
+            "is_in_caption_section": is_in_caption
+        }));
+    }
+    
+    let mut caption_matches = Vec::new();
+    for row in caption_results {
+        caption_matches.push(serde_json::json!({
+            "id": row.get::<i64, _>(0),
+            "summary": row.get::<Option<String>, _>(1),
+            "content": row.get::<String, _>(2),
+            "type": row.get::<Option<String>, _>(3),
+            "file_path": row.get::<Option<String>, _>(4),
+            "caption": row.get::<Option<String>, _>(5),
+            "field": "caption"
+        }));
+    }
+    
+    let mut ocr_matches = Vec::new();
+    for row in ocr_results {
+        ocr_matches.push(serde_json::json!({
+            "id": row.get::<i64, _>(0),
+            "summary": row.get::<Option<String>, _>(1),
+            "content": row.get::<String, _>(2),
+            "type": row.get::<Option<String>, _>(3),
+            "file_path": row.get::<Option<String>, _>(4),
+            "ocr_text": row.get::<Option<String>, _>(5),
+            "field": "ocr_text"
+        }));
+    }
+    
+    Ok(serde_json::json!({
+        "search_text": search_text,
+        "schema_info": {
+            "has_caption_column": has_caption_column,
+            "has_ocr_text_column": has_ocr_text_column
+        },
+        "results": {
+            "summary": summary_matches,
+            "content": content_matches,
+            "caption": caption_matches,
+            "ocr_text": ocr_matches
+        }
+    }))
+}
+
+#[tauri::command]
+pub async fn rescan_screenshots(app: tauri::AppHandle) -> Result<String, String> {
+    use crate::monitors::screenshots;
+
+    // Get job queue from app state
+    let job_queue = app.state::<std::sync::Arc<crate::job_queue::PersistentJobQueue>>();
+
+    match screenshots::rescan_existing_screenshots(job_queue.inner().clone()).await {
+        Ok((total, processed, skipped)) => {
+            Ok(format!(
+                "Rescan complete: {} total files, {} processed, {} skipped",
+                total, processed, skipped
+            ))
+        }
+        Err(e) => Err(format!("Failed to rescan screenshots: {}", e))
+    }
 }

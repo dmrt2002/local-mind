@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use log::{error, info, warn};
+use std::sync::Arc;
 use tauri::{Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
 mod analytics;
@@ -14,6 +15,8 @@ mod embedding;
 mod export;
 mod inference;
 mod job_queue;
+mod monitors;
+mod processing;
 mod rag;
 mod search;
 mod settings;
@@ -128,7 +131,7 @@ async fn main() {
         warn!("Local model not found - fastembed will try to download (may fail)");
     }
 
-    // Initialize database
+    // Initialize database (migrations will handle hash recalculation)
     if let Err(e) = db::sqlite::init_database().await {
         error!("Failed to initialize database: {}", e);
         std::process::exit(1);
@@ -191,8 +194,10 @@ async fn main() {
     };
 
     // Recover incomplete jobs before starting worker
+    // This is non-critical - if it fails, we just continue without recovering old jobs
     if let Err(e) = job_queue.recover_on_startup().await {
-        error!("Failed to recover jobs on startup: {}", e);
+        warn!("⚠️  Failed to recover jobs on startup (non-critical): {}", e);
+        warn!("⚠️  App will continue normally, but pending jobs from previous session may not be recovered");
     }
 
     // Clean up old completed jobs (older than 7 days)
@@ -234,6 +239,121 @@ async fn main() {
     // Initialize global LLM for use in background workers
     inference::global_llm::init_global_llm(llm_manager.clone());
 
+    // Create Arc for monitoring systems (job_queue is moved below)
+    let job_queue_arc = Arc::new(job_queue);
+    {
+        let job_queue_clone = job_queue_arc.clone();
+
+        // Load settings to check if monitoring is enabled
+        match db::sqlite::get_pool().await {
+            Ok(pool) => {
+                match settings::load_settings(&pool).await {
+                    Ok(settings) => {
+                        // Start terminal monitoring if enabled
+                        if settings.terminal_monitoring_enabled {
+                            info!("🔄 Terminal monitoring enabled, starting monitor...");
+
+                            let blocklist: Vec<String> = settings.terminal_blocklist
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .collect();
+                            let allowlist: Vec<String> = settings.terminal_allowlist
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .collect();
+
+                            let filter = monitors::terminal::CommandFilter::new(
+                                blocklist,
+                                allowlist,
+                                settings.terminal_min_length as usize,
+                            );
+
+                            match monitors::terminal::TerminalMonitor::new(
+                                job_queue_clone.clone(),
+                                filter,
+                            ) {
+                                Ok(monitor) => {
+                                    tokio::spawn(async move {
+                                        if let Err(e) = monitor.start_monitoring().await {
+                                            error!("Terminal monitoring failed: {}", e);
+                                        }
+                                    });
+
+                                    info!("✅ Terminal monitoring started");
+                                }
+                                Err(e) => {
+                                    warn!("⚠️  Failed to initialize terminal monitor: {}", e);
+                                    warn!("   Shell hooks may not be installed. Run 'install_shell_hooks' command.");
+                                }
+                            }
+                        } else {
+                            info!("ℹ️  Terminal monitoring disabled in settings");
+                        }
+
+                        // Start screenshot monitoring if enabled
+                        if settings.screenshot_monitoring_enabled {
+                            info!("🔄 Screenshot monitoring enabled, starting monitor...");
+
+                            // Setup Florence-2 if caption generation is enabled
+                            if settings.screenshot_caption_enabled {
+                                if !processing::vision::is_florence2_downloaded() {
+                                    info!("📥 Setting up Florence-2 vision model for screenshot captions...");
+                                    if let Err(e) = processing::vision::download_florence2_model().await {
+                                        warn!("Failed to setup Florence-2: {}", e);
+                                        warn!("   Screenshot captions will use placeholder text.");
+                                        warn!("   Install Python dependencies: pip install transformers torch pillow");
+                                    } else {
+                                        info!("✅ Florence-2 setup complete");
+                                    }
+                                }
+                            }
+
+                            let screenshot_dir = if settings.screenshot_directory.is_empty() {
+                                monitors::screenshots::get_default_screenshot_dir()
+                            } else {
+                                Ok(std::path::PathBuf::from(&settings.screenshot_directory))
+                            };
+
+                            match screenshot_dir {
+                                Ok(dir) => {
+                                    if dir.exists() {
+                                        let monitor = monitors::screenshots::ScreenshotMonitor::new(
+                                            dir.clone(),
+                                            job_queue_clone.clone(),
+                                        );
+
+                                        tokio::spawn(async move {
+                                            if let Err(e) = monitor.start_monitoring().await {
+                                                error!("Screenshot monitoring failed: {}", e);
+                                            }
+                                        });
+
+                                        info!("✅ Screenshot monitoring started for: {}", dir.display());
+                                    } else {
+                                        warn!("⚠️  Screenshot directory not found: {}", dir.display());
+                                        warn!("   Please configure a valid screenshot directory in settings.");
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to determine screenshot directory: {}", e);
+                                }
+                            }
+                        } else {
+                            info!("ℹ️  Screenshot monitoring disabled in settings");
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load settings for monitoring: {}", e);
+                        warn!("Monitoring systems will not start automatically.");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to get database pool for monitoring: {}", e);
+            }
+        }
+    }
+
     // Start background task to auto-unload idle models (memory optimization)
     {
         let llm_manager_bg = llm_manager.clone();
@@ -263,13 +383,13 @@ async fn main() {
 
     // Build Tauri app
     tauri::Builder::default()
-        // Ensure a single running instance; focus existing window on second launch
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
+        // TODO: Re-enable single instance plugin once compatible version is found
+        // .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        //     if let Some(window) = app.get_window("main") {
+        //         let _ = window.show();
+        //         let _ = window.set_focus();
+        //     }
+        // }))
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
@@ -289,7 +409,7 @@ async fn main() {
             }
             _ => {}
         })
-        .manage(job_queue)
+        .manage(job_queue_arc)
         .manage(app_state)
         .manage(search_analytics)
         .manage(llm_manager)
@@ -309,9 +429,11 @@ async fn main() {
             commands::get_child_categories,
             commands::update_category,
             commands::delete_category,
+            commands::delete_all_data,
             commands::assign_snippet_to_category,
             commands::get_snippets_by_category,
             commands::get_snippet_category,
+            commands::get_categorization_reasoning,
             // Auto-categorization
             commands::auto_categorize_snippet,
             commands::auto_categorize_batch,
@@ -335,10 +457,26 @@ async fn main() {
             commands::get_duplicate_stats,
             commands::merge_duplicate_group,
             commands::update_all_content_hashes,
+            commands::recalculate_command_hashes,
             // Smart suggestions commands
             commands::get_suggestions,
             commands::find_related_snippets,
             commands::dismiss_suggestion,
+            // Terminal monitoring commands
+            commands::detect_shell,
+            commands::install_shell_hooks,
+            commands::uninstall_shell_hooks,
+            commands::are_shell_hooks_installed,
+            commands::get_terminal_log_path,
+            // Screenshot monitoring commands
+            commands::get_default_screenshot_dir,
+            commands::is_tesseract_installed,
+            commands::is_apple_vision_available,
+            commands::get_apple_architecture,
+            commands::is_florence2_downloaded,
+            commands::download_florence2_model,
+            commands::search_text_in_database,
+            commands::rescan_screenshots,
         ])
         .setup(|app| {
             // Register global shortcuts
