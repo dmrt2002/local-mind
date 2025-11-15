@@ -1244,6 +1244,109 @@ pub fn get_terminal_log_path() -> Result<String, String> {
         .map_err(|e| format!("Failed to get log path: {}", e))
 }
 
+/// Get saved commands for terminal autocomplete
+#[tauri::command]
+pub async fn get_saved_commands(
+    search: Option<String>,
+    limit: Option<i64>,
+    working_directory: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    use crate::db::sqlite;
+    
+    let pool = sqlite::get_pool().await
+        .map_err(|e| format!("Failed to get database pool: {}", e))?;
+    
+    let limit = limit.unwrap_or(100);
+    let search_pattern = search.as_ref().map(|s| format!("%{}%", s));
+    
+    let rows = if let Some(ref search_str) = search_pattern {
+        if let Some(ref cwd) = working_directory {
+            // Search with both search term and working directory filter
+            sqlx::query(
+                r#"
+                SELECT id, content, summary, working_directory, exit_code, created_at
+                FROM snippets
+                WHERE type = 'command'
+                  AND (content LIKE ? OR summary LIKE ?)
+                  AND working_directory = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                "#
+            )
+            .bind(search_str)
+            .bind(search_str)
+            .bind(cwd)
+            .bind(limit)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| format!("Failed to query commands: {}", e))?
+        } else {
+            // Search with search term only
+            sqlx::query(
+                r#"
+                SELECT id, content, summary, working_directory, exit_code, created_at
+                FROM snippets
+                WHERE type = 'command'
+                  AND (content LIKE ? OR summary LIKE ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+                "#
+            )
+            .bind(search_str)
+            .bind(search_str)
+            .bind(limit)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| format!("Failed to query commands: {}", e))?
+        }
+    } else if let Some(ref cwd) = working_directory {
+        // Filter by working directory only
+        sqlx::query(
+            r#"
+            SELECT id, content, summary, working_directory, exit_code, created_at
+            FROM snippets
+            WHERE type = 'command' AND working_directory = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            "#
+        )
+        .bind(cwd)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("Failed to query commands: {}", e))?
+    } else {
+        // Get all commands (most recent first)
+        sqlx::query(
+            r#"
+            SELECT id, content, summary, working_directory, exit_code, created_at
+            FROM snippets
+            WHERE type = 'command'
+            ORDER BY created_at DESC
+            LIMIT ?
+            "#
+        )
+        .bind(limit)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("Failed to query commands: {}", e))?
+    };
+    
+    let mut commands = Vec::new();
+    for row in rows {
+        commands.push(serde_json::json!({
+            "id": row.get::<i64, _>(0),
+            "command": row.get::<String, _>(1),
+            "summary": row.try_get::<Option<String>, _>(2).ok().flatten(),
+            "working_directory": row.try_get::<Option<String>, _>(3).ok().flatten(),
+            "exit_code": row.try_get::<Option<i32>, _>(4).ok().flatten(),
+            "created_at": row.get::<String, _>(5),
+        }));
+    }
+    
+    Ok(commands)
+}
+
 // Screenshot Monitoring Commands
 
 use crate::monitors::screenshots;

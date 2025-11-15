@@ -148,6 +148,82 @@ For each captured command, LocalMind stores:
    - Timestamp (relative: "2h ago", "Yesterday")
    - Copy to clipboard button
 
+### Terminal Command Picker (Autocomplete)
+
+LocalMind includes a powerful terminal command picker that lets you quickly access and execute previously saved commands directly from your terminal.
+
+#### Features
+
+- ✅ **Interactive Dropdown** - Shows saved commands in a searchable dropdown
+- ✅ **Real-time Filtering** - Type to filter commands as you type
+- ✅ **Fuzzy Search** - Uses `fzf` (if installed) for advanced fuzzy matching
+- ✅ **Auto-execution** - Selected command executes immediately
+- ✅ **Working Directory Filtering** - Optionally filter by current directory
+- ✅ **Multi-shell Support** - Works with Zsh, Bash, and Fish
+
+#### Setup
+
+1. **Enable Command Picker** in Settings → Monitoring → Command Picker
+2. **Install Shell Hooks** (if not already installed for terminal monitoring)
+3. **Restart your terminal** after installation
+
+#### Usage
+
+1. **Press `Ctrl+R`** in your terminal
+2. **Dropdown appears** showing saved commands
+3. **Type to filter** - Commands are filtered in real-time as you type
+4. **Navigate** with arrow keys (↑↓)
+5. **Select** a command and press Enter
+6. **Command executes** immediately in your terminal
+
+#### Keyboard Shortcut
+
+- **Default**: `Ctrl+R` (works on macOS, Linux, and Windows without configuration)
+- **Customizable**: Change in Settings → Monitoring → Command Picker → Keyboard Shortcut
+- **Note**: If you change the shortcut, you'll need to reinstall shell hooks
+
+#### Advanced Features
+
+**Filter by Working Directory:**
+- The picker automatically filters commands by your current working directory
+- Shows commands that were run in the same directory first
+- Can be disabled in settings
+
+**Fallback Menu:**
+- If `fzf` is not installed, falls back to a simple `select` menu
+- Still fully functional, just less fancy
+
+**Command Execution:**
+- Commands are executed in your current shell context
+- Working directory is preserved
+- Environment variables are available
+
+#### Configuration
+
+Located in **Settings → Monitoring → Command Picker**:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Enabled** | On | Master toggle for command picker |
+| **Keyboard Shortcut** | Ctrl+R | Shortcut to open picker (customizable) |
+
+#### Troubleshooting
+
+**Picker doesn't appear when pressing Ctrl+R:**
+1. Verify shell hooks are installed: `cat ~/.zshrc | grep "lm-pick-command"`
+2. Restart terminal after hook installation
+3. Check Settings → Monitoring → Command Picker is enabled
+4. Verify shortcut setting matches what you're pressing
+
+**No commands showing:**
+1. Ensure terminal monitoring is enabled
+2. Run some commands first (they need to be saved)
+3. Check that commands meet filtering criteria (not in blocklist, etc.)
+
+**fzf not working:**
+- Install fzf: `brew install fzf` (macOS) or `sudo apt install fzf` (Linux)
+- Or use the built-in fallback menu (works without fzf)
+
 ---
 
 ## Screenshot Monitoring

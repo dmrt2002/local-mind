@@ -328,7 +328,76 @@ Fuzzy match commands → Select command → Command executes → Palette closes
 
 ---
 
-### 6. Export & Backup
+### 6. Using Terminal Command Picker
+
+#### Flow Diagram
+
+```text
+User presses Ctrl+R in terminal → Dropdown appears with saved commands →
+Type to filter → Select command with arrow keys → Press Enter →
+Command executes immediately in terminal
+```
+
+#### Detailed Steps
+
+1. **Prerequisites:**
+   - Terminal monitoring must be enabled in Settings
+   - Shell hooks must be installed
+   - At least one command must have been saved
+
+2. **Open Command Picker (Ctrl+R in terminal):**
+   - Press `Ctrl+R` in any terminal window
+   - Dropdown menu appears showing saved commands
+   - Uses `fzf` if installed (better UX), or simple `select` menu as fallback
+
+3. **Filter Commands:**
+   - Type to filter commands in real-time
+   - Commands are filtered as you type
+   - Shows commands from current working directory first (if enabled)
+
+4. **Navigate & Select:**
+   - Use ↑↓ arrow keys to navigate
+   - Commands are highlighted as you navigate
+   - Current selection is visible
+
+5. **Execute Command:**
+   - Press Enter to execute selected command
+   - Command runs immediately in your terminal
+   - Working directory and environment are preserved
+
+#### Current Experience
+
+- ✅ **Strengths:**
+  - Fast access to saved commands without leaving terminal
+  - Real-time filtering as you type
+  - Works with fzf for advanced fuzzy search
+  - Auto-executes selected command
+  - Respects current working directory
+  - Customizable keyboard shortcut (default: Ctrl+R)
+  - Multi-shell support (Zsh, Bash, Fish)
+- ⚠️ **Remaining Limitations:**
+  - Requires terminal monitoring to be enabled
+  - Requires shell hooks to be installed
+  - Commands must meet filtering criteria to be saved
+
+#### Configuration
+
+Located in **Settings → Monitoring → Command Picker**:
+
+- **Enable Command Picker**: Toggle to enable/disable feature
+- **Keyboard Shortcut**: Customize the shortcut (default: Ctrl+R)
+  - Change shortcut and reinstall hooks to apply
+
+#### Technical Details
+
+- **CLI Bridge**: `localmind-cli.sh` queries SQLite database directly
+- **Shell Integration**: Function injected into shell config files
+- **Shortcut Parsing**: Converts shortcut strings to shell-specific bindings
+- **Fallback Support**: Works without fzf using simple select menu
+
+---
+
+### 7. Export & Backup
 
 #### Flow Diagram
 

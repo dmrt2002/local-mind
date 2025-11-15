@@ -1145,7 +1145,40 @@ precmd() {
     local exit_code=$?
     echo "$(date +%s)|CMD_END|$PWD|$exit_code" >> "$__lm_log"
 }
+
+# Command Picker (Ctrl+R)
+lm-pick-command() {
+  local cmd
+  if command -v fzf &> /dev/null; then
+    cmd=$("$__lm_cli" --cwd "$PWD" 2>/dev/null | fzf --height=40% --reverse --header="LocalMind: Select a command (type to search)" --prompt="> " --bind "enter:accept")
+  else
+    # Fallback to simple select menu
+    local commands
+    mapfile -t commands < <("$__lm_cli" --cwd "$PWD" 2>/dev/null)
+    select cmd in "${commands[@]}"; do
+      [ -n "$cmd" ] && break
+    done
+  fi
+  
+  if [ -n "$cmd" ]; then
+    BUFFER="$cmd"
+    CURSOR=${#BUFFER}
+    zle accept-line  # Execute the command
+  fi
+}
+zle -N lm-pick-command
+bindkey '^R' lm-pick-command  # Ctrl+R
 ```
+
+**Command Picker Architecture:**
+
+The command picker is a shell-integrated feature that provides quick access to saved commands:
+
+- **CLI Bridge**: `src-tauri/localmind-cli.sh` - Shell script that queries SQLite database
+- **Shell Function**: `lm-pick-command` - Zsh/Bash/Fish function bound to keyboard shortcut
+- **UI**: Uses `fzf` (fuzzy finder) if available, falls back to simple `select` menu
+- **Shortcut Parsing**: `parse_shortcut_to_binding()` converts shortcut strings to shell-specific bindings
+- **Default Shortcut**: `Ctrl+R` (works on all platforms without terminal configuration)
 
 **Database Schema Extension (Migration v13):**
 

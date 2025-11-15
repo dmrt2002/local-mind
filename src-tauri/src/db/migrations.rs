@@ -3,7 +3,7 @@ use log;
 use sqlx::{sqlite::SqlitePool, Row};
 
 /// Current database schema version
-const CURRENT_VERSION: i32 = 19;
+const CURRENT_VERSION: i32 = 20;
 
 /// Migration definitions
 #[derive(Debug)]
@@ -418,6 +418,15 @@ const MIGRATIONS: &[Migration] = &[
             -- CRITICAL: This enforces canonical categories like "Docker Commands" across all folders
             CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name_global_unique
             ON categories(LOWER(REPLACE(REPLACE(TRIM(name), '_', ' '), '-', ' ')));
+        "#,
+    },
+    Migration {
+        version: 20,
+        name: "add_command_picker_settings",
+        up: r#"
+            -- Add command picker settings for terminal autocomplete feature
+            ALTER TABLE settings ADD COLUMN command_picker_enabled BOOLEAN DEFAULT 1;
+            ALTER TABLE settings ADD COLUMN command_picker_shortcut TEXT DEFAULT 'Ctrl+R';
         "#,
     },
 ];

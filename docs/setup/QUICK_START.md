@@ -12,10 +12,16 @@
 
 - **Close Search Window**: Press `Escape` when search window is open
 
+- **Terminal Command Picker**: `Ctrl + R` (in terminal)
+  - Shows dropdown of saved commands
+  - Type to filter, select with arrow keys, press Enter to execute
+  - Requires terminal monitoring to be enabled
+
 ### Windows/Linux
 - **Save Snippet**: `Alt + Shift + C`
 - **Open Search**: `Alt + Shift + F`
 - **Close**: `Escape`
+- **Terminal Command Picker**: `Ctrl + R` (in terminal)
 
 ## 🔍 Where to See Console Logs
 
@@ -52,6 +58,15 @@ You'll see structured logs like:
 3. Results appear instantly (keyword search)
 4. Semantic search results appear below (if embeddings are ready)
 
+### Use Terminal Command Picker
+1. **Enable Terminal Monitoring** in Settings → Monitoring
+2. **Install Shell Hooks** (one-time setup)
+3. **Run some commands** in your terminal (they'll be saved automatically)
+4. **Press `Ctrl+R`** in your terminal
+5. **Type to filter** saved commands
+6. **Select a command** with arrow keys
+7. **Press Enter** to execute the selected command
+
 ### Example Workflow
 ```
 1. Copy code snippet from Stack Overflow
@@ -62,6 +77,15 @@ You'll see structured logs like:
    → Press Option+Shift+F
    → Type "stack overflow code"
    → See results instantly
+
+3. In terminal, run: docker build api-v2
+   → Command automatically saved
+
+4. Later, want to run it again
+   → Press Ctrl+R in terminal
+   → Type "docker build"
+   → Select command and press Enter
+   → ✅ Command executed!
 ```
 
 ## 🐛 Debugging

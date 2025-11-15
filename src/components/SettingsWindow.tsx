@@ -20,6 +20,9 @@ interface Settings {
   terminal_allowlist: string;
   terminal_min_length: number;
   shell_type: string;
+  // Command picker
+  command_picker_enabled: boolean;
+  command_picker_shortcut: string;
   // Screenshot monitoring
   screenshot_monitoring_enabled: boolean;
   screenshot_directory: string;
@@ -73,6 +76,8 @@ export default function SettingsWindow() {
       "docker,git,kubectl,npm,cargo,python,ffmpeg,curl,aws,gcloud,az,terraform,ansible,ssh,scp,rsync",
     terminal_min_length: 60,
     shell_type: "zsh",
+    command_picker_enabled: true,
+    command_picker_shortcut: "Alt+C",
     screenshot_monitoring_enabled: false,
     screenshot_directory: "",
     screenshot_ocr_enabled: true,
@@ -552,6 +557,53 @@ export default function SettingsWindow() {
                 </label>
               </div>
             </div>
+          </div>
+
+          {/* Command Picker */}
+          <div className="setting-group">
+            <h3>Command Picker (Terminal Autocomplete)</h3>
+            <div className="setting-item">
+              <div className="setting-info">
+                <label>Enable Command Picker</label>
+                <p>Show saved commands in terminal with keyboard shortcut (default: {formatShortcutDisplay("Alt+C")})</p>
+              </div>
+              <div className="setting-control">
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.command_picker_enabled}
+                    onChange={(e) =>
+                      handleToggle(
+                        "command_picker_enabled",
+                        e.target.checked
+                      )
+                    }
+                    disabled={saving}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            {settings.command_picker_enabled && (
+              <div className="setting-item">
+                <div className="setting-info">
+                  <label>Keyboard Shortcut</label>
+                  <p>Shortcut to open command picker (e.g., {formatShortcutDisplay("Alt+C")}, Ctrl+R). Note: On macOS, Alt is the Option key.</p>
+                </div>
+                <div className="setting-control">
+                  <input
+                    type="text"
+                    value={settings.command_picker_shortcut}
+                    onChange={(e) =>
+                      handleTextChange("command_picker_shortcut", e.target.value)
+                    }
+                    disabled={saving}
+                    placeholder="Alt+C"
+                    className="shortcut-input"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Screenshot Monitoring */}

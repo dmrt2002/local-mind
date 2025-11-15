@@ -116,6 +116,15 @@ LocalMind's monitoring features enable automatic capture and intelligent indexin
   - Shell type selector
   - Hook installation buttons
 
+- ✅ **Terminal Command Picker (Autocomplete)**
+  - Interactive dropdown in terminal (Ctrl+R)
+  - Real-time command filtering
+  - Fuzzy search via fzf (with fallback)
+  - Auto-execution of selected commands
+  - Working directory filtering
+  - Customizable keyboard shortcut
+  - Multi-shell support (Zsh, Bash, Fish)
+
 ### Screenshot Monitoring
 
 #### Core Features

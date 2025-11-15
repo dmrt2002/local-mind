@@ -468,6 +468,7 @@ async fn main() {
             commands::uninstall_shell_hooks,
             commands::are_shell_hooks_installed,
             commands::get_terminal_log_path,
+            commands::get_saved_commands,
             // Screenshot monitoring commands
             commands::get_default_screenshot_dir,
             commands::is_tesseract_installed,
