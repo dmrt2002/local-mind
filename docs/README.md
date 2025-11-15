@@ -32,6 +32,8 @@ Contains outdated status reports and implementation notes for reference.
 - **TESTING_GUIDE.md** - Testing procedures and guidelines
 - **FEATURE_ROADMAP.md** - Feature planning and implementation roadmap
 - **SCREENSHOT_AND_TERMINAL_IMPLEMENTATION.md** - In-depth implementation guide for monitoring features
+- **LLM_CATEGORIZATION_GUIDE.md** - LLM-based categorization system guide
+- **COMMAND_CATEGORIZATION_PROMPT.md** - Command categorization prompt structure
 
 ## 🚀 Quick Links
 

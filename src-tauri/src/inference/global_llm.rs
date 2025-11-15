@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use crate::inference::llm_manager::LlmManager;
 
+
+
 /// Global LLM manager instance
 static GLOBAL_LLM_MANAGER: OnceCell<Arc<RwLock<Option<LlmManager>>>> = OnceCell::new();
 

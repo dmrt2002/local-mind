@@ -36,14 +36,14 @@ CONFIDENCE THRESHOLDS:
 CANONICAL CATEGORY NAMES FOR TERMINAL COMMANDS:
 Use EXACTLY these names (one canonical name per tool). CREATE these categories if they don't exist yet:
 - docker*, docker-compose*, docker compose* → "Docker Commands" 🐳 (ALL docker variants go here)
-- node*, npm*, npx*, yarn*, pnpm*, ts-node*, nodemon* → "Node.js Development" 📦 (ALL Node.js tools)
+- node*, npm*, npx*, yarn*, pnpm*, ts-node*, nodemon* → "Node Commands" 📦 (ALL Node.js tools)
 - git* → "Git Commands" 🔀 (CREATE if first git command)
-- kubectl*, helm*, k9s* → "Kubernetes" ☸️ (CREATE if first k8s command)
-- cargo*, rustc*, rustup* → "Rust Development" 🦀 (CREATE if first rust command)
-- python*, pip*, poetry* → "Python Development" 🐍 (CREATE if first python command)
-- aws*, gcloud*, az* → "Cloud CLI" ☁️ (CREATE if first cloud CLI command)
-- ssh*, scp*, rsync* → "System Administration" 🔧 (CREATE if first sysadmin command)
-- make*, cmake*, gradle*, mvn* → "Build Tools" 🔨 (CREATE if first build command)
+- kubectl*, helm*, k9s* → "Kubernetes Commands" ☸️ (CREATE if first k8s command)
+- cargo*, rustc*, rustup* → "Rust Commands" 🦀 (CREATE if first rust command)
+- python*, pip*, poetry* → "Python Commands" 🐍 (CREATE if first python command)
+- aws*, gcloud*, az* → "Cloud Commands" ☁️ (CREATE if first cloud CLI command)
+- ssh*, scp*, rsync* → "System Commands" 🔧 (CREATE if first sysadmin command)
+- make*, cmake*, gradle*, mvn* → "Build Commands" 🔨 (CREATE if first build command)
 - All commands from same tool MUST share ONE canonical category name
 - NEVER use generic "Commands" or "Software Development" category if a canonical category applies
 
@@ -51,13 +51,12 @@ ANTI-PATTERNS - WHAT NOT TO DO:
 ❌ WRONG: Creating "Docker Compose Commands" when "Docker Commands" exists
 ❌ WRONG: Creating "Docker & Containers" when "Docker Commands" exists
 ❌ WRONG: Categorizing "docker build" as "Software Development" when "Docker Commands" exists
-❌ WRONG: Creating "Node Commands" when "Node.js Development" exists
 ❌ WRONG: Creating generic "Commands" category for tool-specific commands
 ❌ WRONG: Creating "Python Commands" for "node" command (completely different tools)
 ✅ CORRECT: "docker build" → "Docker Commands" (if exists) or create "Docker Commands"
 ✅ CORRECT: "docker-compose up" → "Docker Commands" (same tool family)
-✅ CORRECT: "node run-seeders.js" → "Node.js Development" (Node.js tool)
-✅ CORRECT: "npm install" → "Node.js Development" (same tool family as node)
+✅ CORRECT: "node run-seeders.js" → "Node Commands" (Node.js tool)
+✅ CORRECT: "npm install" → "Node Commands" (same tool family as node)
 
 SIMILARITY MATCHING:
 - Treat plurals as identical (Docker/Dockers, Command/Commands)
@@ -71,23 +70,23 @@ TERMINAL COMMAND SPECIFIC GUIDANCE:
 - Identify PRIMARY TOOL from first word (before space/dash)
 - Group ALL commands from same tool into ONE category
 - IMPORTANT: "docker compose" (with space) is the SAME as "docker-compose" (with dash) → "Docker Commands"
-- CRITICAL: "node" is part of Node.js tool family → "Node.js Development" (same as npm, npx, yarn, pnpm)
+- CRITICAL: "node" is part of Node.js tool family → "Node Commands" (same as npm, npx, yarn, pnpm)
 - Examples:
   * "docker build" → "Docker Commands"
   * "docker compose up" → "Docker Commands"
   * "docker compose down" → "Docker Commands"
   * "docker-compose up -d" → "Docker Commands"
-  * "node run-seeders.js" → "Node.js Development"
-  * "npm run dev" → "Node.js Development"
-  * "npm install" → "Node.js Development"
+  * "node run-seeders.js" → "Node Commands"
+  * "npm run dev" → "Node Commands"
+  * "npm install" → "Node Commands"
   * "git commit" → "Git Commands"
 - Look for tool prefixes: docker*, node*, npm*, npx*, yarn*, pnpm*, git*, kubectl*, cargo*, python*
 - Ignore subcommands, flags, and arguments - focus ONLY on the first tool word
 - Multi-command chains: categorize by PRIMARY action
 - DO NOT use generic "Commands" or "Software Development" category - ALWAYS use or CREATE a canonical category
 - If you encounter "docker build", "docker compose up", "docker logs", etc. they ALL go to "Docker Commands"
-- If you encounter "node", "npm install", "npm run dev", "npm test", etc. they ALL go to "Node.js Development"
-- NEVER categorize "node" commands as "Python Development" - they are completely different tools
+- If you encounter "node", "npm install", "npm run dev", "npm test", etc. they ALL go to "Node Commands"
+- NEVER categorize "node" commands as "Python Commands" - they are completely different tools
 - Think like a senior developer: group tool families together, avoid duplicates, avoid generic categories
 
 Respond ONLY with valid JSON (no markdown, no explanation).<|im_end|>
@@ -122,18 +121,18 @@ Decision: {"action":"create_new","category_name":"Finance & Business","emoji":"�
 
 Example 4 - Recognizing pattern despite different subcommand:
 Snippet: "npm run test && npm run build"
-Existing: "Node.js Development"
-Decision: {"action":"use_existing","category_name":"Node.js Development","emoji":"📦","reasoning":"NPM commands use canonical Node.js Development category","confidence":0.92}
+Existing: "Node Commands"
+Decision: {"action":"use_existing","category_name":"Node Commands","emoji":"📦","reasoning":"NPM commands use canonical Node Commands category","confidence":0.92}
 
 Example 5 - Node.js tool family recognition:
 Snippet: "node run-seeders.js"
-Existing: "Node.js Development"
-Decision: {"action":"use_existing","category_name":"Node.js Development","emoji":"📦","reasoning":"node command is part of Node.js tool family, same category as npm/npx/yarn","confidence":0.95}
+Existing: "Node Commands"
+Decision: {"action":"use_existing","category_name":"Node Commands","emoji":"📦","reasoning":"node command is part of Node.js tool family, same category as npm/npx/yarn","confidence":0.95}
 
 Example 6 - Anti-pattern (what NOT to do):
 Snippet: "node run-seeders.js"
-Existing: ["Node.js Development", "Python Development"]
-Decision: {"action":"use_existing","category_name":"Node.js Development","emoji":"📦","reasoning":"node is Node.js tool, NOT Python - must use Node.js Development category","confidence":0.98}
+Existing: ["Node Commands", "Python Commands"]
+Decision: {"action":"use_existing","category_name":"Node Commands","emoji":"📦","reasoning":"node is Node.js tool, NOT Python - must use Node Commands category","confidence":0.98}
 
 Now categorize the snippet above. Respond with ONLY the JSON object:<|im_end|>
 <|im_start|>assistant

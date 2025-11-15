@@ -361,34 +361,14 @@ impl TerminalMonitor {
         .context("Failed to insert command snippet")?;
 
         // Check if insert was ignored (duplicate detected)
-        let snippet_id = if result.rows_affected() == 0 {
-            // Duplicate detected - fetch existing ID
-            log::info!("⏭️  Command duplicate detected (race condition), fetching existing ID");
-            let existing_id: Option<i64> = sqlx::query_scalar(
-                r#"
-                SELECT id FROM snippets
-                WHERE type = 'command' AND content_hash = ?
-                LIMIT 1
-                "#,
-            )
-            .bind(&content_hash)
-            .fetch_optional(&pool)
-            .await
-            .context("Failed to fetch existing command ID")?;
+        if result.rows_affected() == 0 {
+            // Duplicate detected - INSERT OR IGNORE prevented insertion
+            log::info!("⏭️  Command duplicate detected (race condition), skipping job queue and LLM processing");
+            return Ok(()); // Exit immediately - don't queue job or load LLM
+        }
 
-            match existing_id {
-                Some(id) => {
-                    log::info!("✅ Using existing command snippet ID: {}", id);
-                    id
-                }
-                None => {
-                    anyhow::bail!("Command duplicate detected but existing ID not found");
-                }
-            }
-        } else {
-            // Insert succeeded - get the ID
-            result.last_insert_rowid()
-        };
+        // Insert succeeded - get the ID
+        let snippet_id = result.last_insert_rowid();
 
         log::info!("✅ Saved command {}: {}", snippet_id, cmd.command);
 

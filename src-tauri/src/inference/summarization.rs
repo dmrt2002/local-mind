@@ -72,7 +72,7 @@ fn build_summarization_prompt(
     text: &str,
     caption: Option<&str>,
     entities: Option<&ExtractedEntities>,
-    content_type: &ContentType,
+    _content_type: &ContentType,
 ) -> String {
     // Priority: Use caption if available, otherwise use OCR text
     let (primary_text, is_caption) = if let Some(cap) = caption {
@@ -192,7 +192,9 @@ STEP 3 - READ WHAT IS ACTUALLY WRITTEN:
 
     format!(
         r#"<|im_start|>system
-You are a summarization assistant. Your job is to read {} and create accurate summaries. Respond ONLY with valid JSON, no other text.<|im_end|>
+You are a professional summarization assistant. Your job is to read {} and create accurate, concise summaries. 
+
+CRITICAL: You MUST respond with ONLY valid JSON. No explanations, no markdown, no additional text - just the JSON object.<|im_end|>
 <|im_start|>user
 {}:
 ---
@@ -204,25 +206,53 @@ INSTRUCTIONS:
 
 {}
 
-STEP 4 - FORMAT YOUR SUMMARY:
-Use this format: "[Content Type]: [Main Subject/Topic]"
+STEP 4 - CREATE YOUR SUMMARY:
 
-Examples:
-- "Code: React authentication component with JWT validation"
-- "Conversation: Travel discussion about island destinations and tourism"
-- "Terminal: Docker container debugging and log analysis"
-- "Document: Product requirements for user dashboard feature"
-- "Webpage: Python async programming tutorial"
+REQUIRED FORMAT: Just the main subject/topic - NO content type prefix
 
-CRITICAL RULES:
-1. Base summary ONLY on words that ACTUALLY APPEAR in the content
-2. Do NOT fabricate topics - use actual content from the input
-3. If unclear, be honest: "Screenshot with fragmented text" rather than guessing
+Summary Quality Requirements:
+1. MUST be concise: 10-30 words maximum (under 150 characters)
+2. MUST be specific: Include actual topic/subject from the content
+3. MUST be accurate: Only use information that appears in the input
+4. MUST be clear: Use proper grammar and complete phrases
+5. NO content type prefixes: Do NOT include "Code:", "Terminal:", "Web:", etc.
 
-Generate summary (max 150 chars) and 2-4 key points from the content:
-{{"summary":"[Type]: [Actual topic from content]","key_points":["key point 1","key point 2"]}}
+Good Examples:
+- "React authentication component with JWT validation"
+- "Travel discussion about island destinations and tourism"
+- "Docker container debugging and log analysis"
+- "Product requirements for user dashboard feature"
+- "Python async programming tutorial"
+- "Mobile app wireframe for user onboarding flow"
 
-Remember: Read the actual content, don't invent topics.<|im_end|>
+Bad Examples (DO NOT DO THIS):
+- "Screenshot" (too generic)
+- "Code" (missing topic)
+- "Code: React component" (has unnecessary type prefix)
+- "Some code about authentication" (vague, not specific)
+- "A conversation" (too generic)
+
+STEP 5 - EXTRACT KEY POINTS:
+- Provide 2-4 key points that summarize important details
+- Each key point should be a short phrase (5-15 words)
+- Focus on the most important information from the content
+
+CRITICAL OUTPUT RULES:
+1. Respond with ONLY valid JSON - no other text before or after
+2. JSON must start with {{ and end with }}
+3. Use double quotes for all strings
+4. Escape special characters properly (\", \\, \n)
+5. Do NOT include any explanatory text outside the JSON
+
+REQUIRED JSON FORMAT:
+{{"summary":"[Specific topic from content - NO type prefix]","key_points":["point 1","point 2","point 3"]}}
+
+Remember:
+- Base summary ONLY on words that ACTUALLY APPEAR in the content
+- Do NOT fabricate topics - use actual content from the input
+- If content is unclear, be honest: "Screenshot with fragmented text" rather than guessing
+- Keep it concise and specific
+- Output ONLY the JSON, nothing else<|im_end|>
 <|im_start|>assistant
 {{"#,
         input_type_description, input_label, text_preview, entities_section, instructions
@@ -257,16 +287,93 @@ fn parse_summary_response(response: &str, content_type: ContentType) -> Result<S
 
     log::debug!("Extracted JSON: {}", json_str);
 
+    // Clone content_type since we may need it for fallback
+    let content_type_clone = content_type.clone();
+
     // Try to parse JSON
     match serde_json::from_str::<SummaryResult>(&json_str) {
         Ok(mut result) => {
             result.content_type = content_type;
 
-            // Validate summary length
-            if result.summary.len() > 200 {
-                result.summary = format!("{}...", &result.summary[..197]);
+            // Validate and clean summary
+            let summary = result.summary.trim();
+
+            // Remove any trailing punctuation that might cause issues
+            let summary = summary.trim_end_matches(['.', '!', '?', ':', ';']);
+
+            // Validate summary quality
+            if summary.is_empty() || summary.len() < 3 {
+                log::warn!("Summary is too short or empty, using fallback");
+                return Ok(create_fallback_summary(&json_str, content_type_clone));
             }
 
+            // Remove any content type prefixes if present (e.g., "Code:", "Terminal:", etc.)
+            let summary_cleaned = if let Some(colon_pos) = summary.find(':') {
+                // Check if it looks like a content type prefix (short word before colon)
+                let before_colon = &summary[..colon_pos].trim();
+                let after_colon = &summary[colon_pos + 1..].trim();
+
+                // Common content type prefixes to remove
+                let type_prefixes = [
+                    "code",
+                    "terminal",
+                    "web",
+                    "document",
+                    "doc",
+                    "chat",
+                    "design",
+                    "conversation",
+                ];
+                if type_prefixes
+                    .iter()
+                    .any(|&prefix| before_colon.eq_ignore_ascii_case(prefix))
+                    && before_colon.len() < 15
+                    && !after_colon.is_empty()
+                {
+                    log::debug!(
+                        "Removing content type prefix '{}:' from summary",
+                        before_colon
+                    );
+                    after_colon.to_string()
+                } else {
+                    summary.to_string()
+                }
+            } else {
+                summary.to_string()
+            };
+
+            // Validate summary length (max 200 chars)
+            if summary_cleaned.len() > 200 {
+                result.summary = format!("{}...", &summary_cleaned[..197]);
+            } else {
+                result.summary = summary_cleaned;
+            }
+
+            // Validate summary format - should not be too generic
+            let summary_lower = result.summary.to_lowercase();
+            let is_too_generic = summary_lower == "screenshot"
+                || summary_lower == "image"
+                || summary_lower == "content"
+                || summary_lower.len() < 10;
+
+            if is_too_generic {
+                log::warn!(
+                    "Summary is too generic: '{}', using fallback",
+                    result.summary
+                );
+                return Ok(create_fallback_summary(&json_str, content_type_clone));
+            }
+
+            // Clean and validate key points
+            result.key_points = result
+                .key_points
+                .into_iter()
+                .map(|kp| kp.trim().to_string())
+                .filter(|kp| !kp.is_empty() && kp.len() > 3)
+                .take(4) // Limit to 4 key points
+                .collect();
+
+            log::debug!("Parsed summary successfully: '{}'", result.summary);
             Ok(result)
         }
         Err(e) => {
@@ -344,32 +451,6 @@ fn create_fallback_summary(text: &str, content_type: ContentType) -> SummaryResu
     }
 }
 
-/// Extract first complete sentence from text
-fn extract_first_sentence(text: &str) -> Option<String> {
-    let text = text.trim();
-
-    // Find sentence endings
-    let sentence_endings = [". ", "! ", "? ", ".\n", "!\n", "?\n"];
-
-    let mut end_pos = None;
-    for ending in sentence_endings.iter() {
-        if let Some(pos) = text.find(ending) {
-            if end_pos.is_none() || pos < end_pos.unwrap() {
-                end_pos = Some(pos + ending.len() - 1);
-            }
-        }
-    }
-
-    end_pos.map(|pos| {
-        let sentence = text[..=pos].trim().to_string();
-        if sentence.len() > 150 {
-            format!("{}...", &sentence[..147])
-        } else {
-            sentence
-        }
-    })
-}
-
 /// Extract first N sentences from text, up to max_length
 fn extract_first_n_sentences(text: &str, n: usize, max_length: usize) -> Option<String> {
     let text = text.trim();
@@ -431,20 +512,7 @@ pub fn generate_rule_based_summary(
     let mut parts = Vec::new();
     let mut key_points = Vec::new();
 
-    // Add content type prefix
-    let type_prefix = match content_type {
-        ContentType::Code => "Code:",
-        ContentType::Terminal => "Terminal:",
-        ContentType::WebPage => "Web:",
-        ContentType::Document => "Doc:",
-        ContentType::Design => "Design:",
-        ContentType::Chat => "Chat:",
-        ContentType::General => "",
-    };
-
-    if !type_prefix.is_empty() {
-        parts.push(type_prefix.to_string());
-    }
+    // No content type prefix - just use the content directly
 
     // Priority: Use caption (vision model) if available, otherwise use OCR text
     if let Some(cap) = caption {
@@ -495,7 +563,7 @@ pub fn generate_rule_based_summary(
     }
 
     let summary = if parts.is_empty() {
-        format!("{} content", type_prefix)
+        "Screenshot content".to_string()
     } else {
         parts.join(" ")
     };
@@ -517,15 +585,6 @@ pub fn generate_rule_based_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_extract_first_sentence() {
-        let text = "This is the first sentence. This is the second.";
-        assert_eq!(
-            extract_first_sentence(text).unwrap(),
-            "This is the first sentence."
-        );
-    }
 
     #[test]
     fn test_fallback_summary() {

@@ -101,14 +101,17 @@ View snippets + suggestions → Select snippet → View/edit/copy
 
 3. **Browse Categories:**
    - View hierarchical category structure
-   - See snippet counts for each category
+   - See snippet counts for each category (shows only directly assigned snippets)
    - Expand/collapse categories to explore structure
    - Auto-expand when navigating from search
+   - Content type filters (All/Snippets/Commands/Screenshots) show parent categories if they have descendants with that type
 
 4. **Select Category:**
    - Click on category to view its contents
-   - Content panel shows all snippets in category
-   - Nested structure shows child categories and snippets
+   - Content panel shows **only snippets directly assigned** to that category
+   - Does not include snippets from child categories (prevents duplicates)
+   - Child categories are shown separately in the tree
+   - Each snippet appears in exactly one category view
 
 5. **View Snippet:**
    - Click snippet to view full content

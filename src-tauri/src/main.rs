@@ -205,17 +205,7 @@ async fn main() {
         warn!("Failed to cleanup old jobs: {}", e);
     }
 
-    // Start worker
-    if let Err(e) = job_queue.start_worker() {
-        error!("Failed to start job queue worker: {}", e);
-        error!("App cannot continue without worker. Exiting.");
-        std::process::exit(1);
-    }
-
-    // Initialize app state
-    let app_state = AppState::detect_initial_state().await;
-
-    // Initialize LLM manager
+    // Initialize LLM manager BEFORE starting worker (so worker can use it)
     let llm_manager = match inference::llm_manager::get_default_model_path() {
         Ok(model_path) => {
             info!("LLM model path: {:?}", model_path);
@@ -236,8 +226,18 @@ async fn main() {
         }
     };
 
-    // Initialize global LLM for use in background workers
+    // Initialize global LLM for use in background workers (BEFORE starting worker!)
     inference::global_llm::init_global_llm(llm_manager.clone());
+
+    // Start worker (NOW that LLM is initialized and available)
+    if let Err(e) = job_queue.start_worker() {
+        error!("Failed to start job queue worker: {}", e);
+        error!("App cannot continue without worker. Exiting.");
+        std::process::exit(1);
+    }
+
+    // Initialize app state
+    let app_state = AppState::detect_initial_state().await;
 
     // Create Arc for monitoring systems (job_queue is moved below)
     let job_queue_arc = Arc::new(job_queue);
@@ -477,6 +477,8 @@ async fn main() {
             commands::download_florence2_model,
             commands::search_text_in_database,
             commands::rescan_screenshots,
+            commands::check_screenshot_status,
+            commands::get_uncategorized_screenshots,
         ])
         .setup(|app| {
             // Register global shortcuts

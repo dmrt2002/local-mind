@@ -46,12 +46,12 @@ pub fn suggest_category_from_content(content: &str) -> (String, String) {
         ("docker ", "Docker Commands", "🐳", 5),
 
         // Node.js / NPM commands
-        ("npm install", "Node.js Development", "📦", 7),
-        ("npm run", "Node.js Development", "📦", 7),
-        ("yarn ", "Node.js Development", "📦", 7),
-        ("pnpm ", "Node.js Development", "📦", 7),
-        ("npx ", "Node.js Development", "📦", 7),
-        ("npm ", "Node.js Development", "📦", 5),
+        ("npm install", "Node Commands", "📦", 7),
+        ("npm run", "Node Commands", "📦", 7),
+        ("yarn ", "Node Commands", "📦", 7),
+        ("pnpm ", "Node Commands", "📦", 7),
+        ("npx ", "Node Commands", "📦", 7),
+        ("npm ", "Node Commands", "📦", 5),
 
         // Git commands
         ("git commit", "Git Commands", "🔀", 7),
@@ -60,39 +60,64 @@ pub fn suggest_category_from_content(content: &str) -> (String, String) {
         ("git ", "Git Commands", "🔀", 5),
 
         // Rust development
-        ("cargo build", "Rust Development", "🦀", 7),
-        ("cargo run", "Rust Development", "🦀", 7),
-        ("cargo test", "Rust Development", "🦀", 7),
-        ("cargo ", "Rust Development", "🦀", 5),
-        ("rustc ", "Rust Development", "🦀", 5),
+        ("cargo build", "Rust Commands", "🦀", 7),
+        ("cargo run", "Rust Commands", "🦀", 7),
+        ("cargo test", "Rust Commands", "🦀", 7),
+        ("cargo ", "Rust Commands", "🦀", 5),
+        ("rustc ", "Rust Commands", "🦀", 5),
 
         // Python development
-        ("python ", "Python Development", "🐍", 6),
-        ("pip install", "Python Development", "🐍", 7),
-        ("pip ", "Python Development", "🐍", 5),
-        ("poetry ", "Python Development", "🐍", 6),
+        ("python ", "Python Commands", "🐍", 6),
+        ("pip install", "Python Commands", "🐍", 7),
+        ("pip ", "Python Commands", "🐍", 5),
+        ("poetry ", "Python Commands", "🐍", 6),
 
         // Kubernetes
-        ("kubectl ", "Kubernetes", "☸️", 7),
-        ("helm ", "Kubernetes", "☸️", 7),
-        ("k9s ", "Kubernetes", "☸️", 7),
+        ("kubectl ", "Kubernetes Commands", "☸️", 7),
+        ("helm ", "Kubernetes Commands", "☸️", 7),
+        ("k9s ", "Kubernetes Commands", "☸️", 7),
+
+        // DevOps & Deployment (HIGH PRIORITY - should match before generic fallbacks)
+        ("deploy workflow", "Deployment", "🚀", 9),
+        ("deploy to", "Deployment", "🚀", 8),
+        ("deploy", "Deployment", "🚀", 7),
+        ("deployment", "Deployment", "🚀", 7),
+        ("workflow", "Workflows", "⚙️", 7),
+        ("ci/cd", "CI/CD", "🔄", 8),
+        ("ci cd", "CI/CD", "🔄", 8),
+        ("continuous integration", "CI/CD", "🔄", 8),
+        ("continuous deployment", "CI/CD", "🔄", 8),
+        ("pipeline", "Pipelines", "🔧", 7),
+        ("coolify", "Coolify", "🚀", 8),
+        ("github actions", "CI/CD", "🔄", 8),
+        ("gitlab ci", "CI/CD", "🔄", 8),
+        ("jenkins", "CI/CD", "🔄", 7),
+        ("circleci", "CI/CD", "🔄", 7),
+        ("travis ci", "CI/CD", "🔄", 7),
+        ("infrastructure", "Infrastructure", "🏗️", 7),
+        ("devops", "DevOps", "🔧", 7),
+        ("automation", "Automation", "🤖", 6),
+        ("orchestration", "Orchestration", "🎼", 6),
+        ("terraform", "Infrastructure", "🏗️", 7),
+        ("ansible", "Automation", "🤖", 7),
+        ("kubernetes", "Kubernetes", "☸️", 6),
 
         // Cloud CLI
-        ("aws ", "Cloud CLI", "☁️", 6),
-        ("gcloud ", "Cloud CLI", "☁️", 6),
-        ("az ", "Cloud CLI", "☁️", 6),
+        ("aws ", "Cloud Commands", "☁️", 6),
+        ("gcloud ", "Cloud Commands", "☁️", 6),
+        ("az ", "Cloud Commands", "☁️", 6),
 
         // System Administration
-        ("ssh ", "System Administration", "🔧", 6),
-        ("scp ", "System Administration", "🔧", 6),
-        ("rsync ", "System Administration", "🔧", 6),
-        ("sudo ", "System Administration", "🔧", 5),
+        ("ssh ", "System Commands", "🔧", 6),
+        ("scp ", "System Commands", "🔧", 6),
+        ("rsync ", "System Commands", "🔧", 6),
+        ("sudo ", "System Commands", "🔧", 5),
 
         // Build Tools
-        ("make ", "Build Tools", "🔨", 6),
-        ("cmake ", "Build Tools", "🔨", 6),
-        ("gradle ", "Build Tools", "🔨", 6),
-        ("mvn ", "Build Tools", "🔨", 6),
+        ("make ", "Build Commands", "🔨", 6),
+        ("cmake ", "Build Commands", "🔨", 6),
+        ("gradle ", "Build Commands", "🔨", 6),
+        ("mvn ", "Build Commands", "🔨", 6),
 
         // Generic shell (only if nothing else matches)
         ("brew ", "Package Management", "📦", 4),

@@ -170,6 +170,7 @@ Generates descriptive captions for screenshots using Microsoft's Florence-2 mode
 
 import sys
 import os
+import re
 from pathlib import Path
 
 try:
@@ -198,22 +199,70 @@ def generate_caption(image_path: str) -> str:
         # Load and process image
         image = Image.open(image_path).convert("RGB")
 
-        # Generate caption
+        # Generate caption using Florence-2 CAPTION task
+        # Use the proper task prompt for descriptive captions
         prompt = "<CAPTION>"
         inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
 
+        # Generate with improved parameters for better quality and completeness
         generated_ids = model.generate(
             input_ids=inputs["input_ids"],
             pixel_values=inputs["pixel_values"],
-            max_new_tokens=1024,
-            num_beams=3,
+            max_new_tokens=256,  # Reduced for more focused captions
+            num_beams=5,  # Increased for better quality
+            length_penalty=1.2,  # Encourage longer, more complete descriptions
+            repetition_penalty=1.1,  # Prevent repetition
+            do_sample=False,  # Use deterministic beam search for consistency
+            early_stopping=True,  # Stop when complete
         )
 
+        # Decode the generated text
         generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
 
-        # Parse the caption from the generated text
-        caption = generated_text.replace(prompt, "").strip()
-
+        # Parse the caption from Florence-2 output
+        # Florence-2 returns: "<CAPTION>actual caption text</s>" or similar format
+        caption = generated_text
+        
+        # Remove the prompt tag if present
+        if prompt in caption:
+            # Find where the actual caption starts (after the prompt)
+            prompt_end = caption.find(prompt) + len(prompt)
+            caption = caption[prompt_end:].strip()
+        
+        # Remove end-of-sequence and other special tokens
+        # Florence-2 uses </s> as end token
+        end_tokens = ["</s>", "<|endoftext|>", "<pad>", "<s>"]
+        for token in end_tokens:
+            caption = caption.replace(token, "").strip()
+        
+        # Remove any remaining special tokens that might fragment text
+        import re
+        # Remove any remaining XML-like tags or special markers
+        caption = re.sub(r'<[^>]+>', '', caption)
+        
+        # Clean up whitespace - normalize but preserve sentence structure
+        caption = " ".join(caption.split())
+        caption = caption.strip()
+        
+        # Ensure caption is a complete sentence
+        # If it doesn't end with punctuation, add a period if it's a complete thought
+        if caption and not caption[-1] in [".", "!", "?", ":", ";"]:
+            # Check if it looks like a complete sentence (has subject/verb structure)
+            # For now, just ensure it ends properly
+            if len(caption) > 10:  # Only add period if it's substantial
+                caption = caption + "."
+        
+        # Remove any trailing punctuation artifacts (multiple punctuation marks)
+        while len(caption) > 1 and caption[-1] in [".", ",", ";", ":", "!", "?"] and caption[-2] in [".", ",", ";", ":", "!", "?"]:
+            caption = caption[:-1].strip()
+        
+        # Final validation: ensure caption is meaningful
+        if not caption or len(caption) < 3:
+            return f"Screenshot of {Path(image_path).stem}"
+        
+        # Remove any leading/trailing quotes if present
+        caption = caption.strip('"').strip("'").strip()
+        
         return caption
 
     except Exception as e:

@@ -705,16 +705,17 @@ pub async fn save_snippet(
     let pool = get_pool().await?;
     let now = Utc::now();
 
-    // Calculate content hash
+    // Calculate content hash FIRST before any expensive operations
     let content_hash = crate::dedup::calculate_content_hash(&content);
 
-    // Check for duplicate
+    // Check for duplicate IMMEDIATELY - don't waste resources on summary generation or LLM calls
     if let Some(duplicate) = crate::dedup::find_duplicate(&pool, &content).await? {
-        log::info!("⏭️  Snippet already exists (ID: {}), skipping duplicate", duplicate.id);
+        log::info!("⏭️  Snippet already exists (ID: {}), skipping duplicate - NO LLM processing needed", duplicate.id);
         log::info!("   Existing snippet created at: {}", duplicate.created_at);
-        return Ok(duplicate.id);
+        return Ok(duplicate.id); // Exit immediately, no summary generation, no LLM calls
     }
 
+    // Only generate summary if it's a new snippet (not a duplicate)
     // Generate summary - try LLM first for text content, fall back to rule-based
     let summary = generate_summary_with_llm_fallback(&content).await;
 
@@ -1328,7 +1329,7 @@ pub async fn create_category(
     )
     .bind(&name)
     .bind(parent_id)
-    .bind(emoji.unwrap_or_else(|| "📁".to_string()))
+    .bind(emoji.unwrap_or_else(|| "".to_string()))
     .bind(now.to_rfc3339())
     .execute(&pool)
     .await;
@@ -1494,17 +1495,43 @@ pub async fn get_categories(parent_id: Option<Option<i64>>, content_type: Option
         if let Some(parent_val) = parent {
             if let Some(ref filter_type) = content_type {
                 // Filter by parent AND content type
+                // Include categories that directly have snippets of this type OR have descendants with snippets of this type
                 sqlx::query(
                     r#"
                     SELECT DISTINCT c.id, c.name, c.parent_id, c.emoji, c.created_at
                     FROM categories c
-                    INNER JOIN snippet_categories sc ON c.id = sc.category_id
-                    INNER JOIN snippets s ON sc.snippet_id = s.id
-                    WHERE c.parent_id = ? AND s.type = ?
+                    WHERE c.parent_id = ? AND (
+                        -- Category directly has snippets of this type
+                        EXISTS (
+                            SELECT 1
+                            FROM snippet_categories sc
+                            INNER JOIN snippets s ON sc.snippet_id = s.id
+                            WHERE sc.category_id = c.id AND s.type = ?
+                        )
+                        OR
+                        -- Category has descendants with snippets of this type
+                        EXISTS (
+                            WITH RECURSIVE descendants AS (
+                                -- Start with direct children
+                                SELECT id FROM categories WHERE parent_id = c.id
+                                UNION ALL
+                                -- Recursively get children of children
+                                SELECT cat.id
+                                FROM categories cat
+                                INNER JOIN descendants d ON cat.parent_id = d.id
+                            )
+                            SELECT 1
+                            FROM descendants d
+                            INNER JOIN snippet_categories sc ON sc.category_id = d.id
+                            INNER JOIN snippets s ON sc.snippet_id = s.id
+                            WHERE s.type = ?
+                        )
+                    )
                     ORDER BY c.name ASC
                     "#,
                 )
                 .bind(parent_val)
+                .bind(filter_type)
                 .bind(filter_type)
                 .fetch_all(&pool)
                 .await?
@@ -1526,16 +1553,42 @@ pub async fn get_categories(parent_id: Option<Option<i64>>, content_type: Option
             // Get root categories (parent_id IS NULL)
             if let Some(ref filter_type) = content_type {
                 // Filter root categories by content type
+                // Include categories that directly have snippets of this type OR have descendants with snippets of this type
                 sqlx::query(
                     r#"
                     SELECT DISTINCT c.id, c.name, c.parent_id, c.emoji, c.created_at
                     FROM categories c
-                    INNER JOIN snippet_categories sc ON c.id = sc.category_id
-                    INNER JOIN snippets s ON sc.snippet_id = s.id
-                    WHERE c.parent_id IS NULL AND s.type = ?
+                    WHERE c.parent_id IS NULL AND (
+                        -- Category directly has snippets of this type
+                        EXISTS (
+                            SELECT 1
+                            FROM snippet_categories sc
+                            INNER JOIN snippets s ON sc.snippet_id = s.id
+                            WHERE sc.category_id = c.id AND s.type = ?
+                        )
+                        OR
+                        -- Category has descendants with snippets of this type
+                        EXISTS (
+                            WITH RECURSIVE descendants AS (
+                                -- Start with direct children
+                                SELECT id FROM categories WHERE parent_id = c.id
+                                UNION ALL
+                                -- Recursively get children of children
+                                SELECT cat.id
+                                FROM categories cat
+                                INNER JOIN descendants d ON cat.parent_id = d.id
+                            )
+                            SELECT 1
+                            FROM descendants d
+                            INNER JOIN snippet_categories sc ON sc.category_id = d.id
+                            INNER JOIN snippets s ON sc.snippet_id = s.id
+                            WHERE s.type = ?
+                        )
+                    )
                     ORDER BY c.name ASC
                     "#,
                 )
+                .bind(filter_type)
                 .bind(filter_type)
                 .fetch_all(&pool)
                 .await?
@@ -1557,16 +1610,42 @@ pub async fn get_categories(parent_id: Option<Option<i64>>, content_type: Option
         // Get all categories
         if let Some(ref filter_type) = content_type {
             // Filter all categories by content type
+            // Include categories that directly have snippets of this type OR have descendants with snippets of this type
             sqlx::query(
                 r#"
                 SELECT DISTINCT c.id, c.name, c.parent_id, c.emoji, c.created_at
                 FROM categories c
-                INNER JOIN snippet_categories sc ON c.id = sc.category_id
-                INNER JOIN snippets s ON sc.snippet_id = s.id
-                WHERE s.type = ?
+                WHERE (
+                    -- Category directly has snippets of this type
+                    EXISTS (
+                        SELECT 1
+                        FROM snippet_categories sc
+                        INNER JOIN snippets s ON sc.snippet_id = s.id
+                        WHERE sc.category_id = c.id AND s.type = ?
+                    )
+                    OR
+                    -- Category has descendants with snippets of this type
+                    EXISTS (
+                        WITH RECURSIVE descendants AS (
+                            -- Start with direct children
+                            SELECT id FROM categories WHERE parent_id = c.id
+                            UNION ALL
+                            -- Recursively get children of children
+                            SELECT cat.id
+                            FROM categories cat
+                            INNER JOIN descendants d ON cat.parent_id = d.id
+                        )
+                        SELECT 1
+                        FROM descendants d
+                        INNER JOIN snippet_categories sc ON sc.category_id = d.id
+                        INNER JOIN snippets s ON sc.snippet_id = s.id
+                        WHERE s.type = ?
+                    )
+                )
                 ORDER BY c.name ASC
                 "#,
             )
+            .bind(filter_type)
             .bind(filter_type)
             .fetch_all(&pool)
             .await?
@@ -1889,7 +1968,50 @@ pub async fn assign_snippet_to_category_with_method(
     Ok(())
 }
 
+/// Get all descendant category IDs recursively (including the category itself)
+async fn get_all_descendant_category_ids(pool: &SqlitePool, category_id: i64) -> Result<Vec<i64>> {
+    let mut all_ids = vec![category_id];
+    let mut to_process = vec![category_id];
+    
+    while !to_process.is_empty() {
+        let current_id = to_process.pop().unwrap();
+        
+        // Get direct children
+        let children: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM categories WHERE parent_id = ?"
+        )
+        .bind(current_id)
+        .fetch_all(pool)
+        .await?;
+        
+        for child_id in children {
+            all_ids.push(child_id);
+            to_process.push(child_id);
+        }
+    }
+    
+    Ok(all_ids)
+}
+
+/// Get direct child category IDs only (including the category itself, but not grandchildren)
+async fn get_direct_child_category_ids(pool: &SqlitePool, category_id: i64) -> Result<Vec<i64>> {
+    let mut category_ids = vec![category_id];
+    
+    // Get only direct children (not grandchildren)
+    let children: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM categories WHERE parent_id = ?"
+    )
+    .bind(category_id)
+    .fetch_all(pool)
+    .await?;
+    
+    category_ids.extend(children);
+    
+    Ok(category_ids)
+}
+
 /// Get all snippets in a category with pagination
+/// Only returns snippets directly assigned to this category (excludes children to prevent duplicates)
 pub async fn get_snippets_by_category(
     category_id: i64,
     limit: i64,
@@ -1898,11 +2020,14 @@ pub async fn get_snippets_by_category(
 ) -> Result<Vec<Snippet>> {
     let pool = get_pool().await?;
 
+    log::debug!("Querying snippets directly assigned to category {}", category_id);
+
     let rows = if let Some(ref filter_type) = content_type {
         // Filter by content type if provided
+        log::debug!("Querying snippets for category {} with content_type filter: {}", category_id, filter_type);
         sqlx::query(
             r#"
-            SELECT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
+            SELECT DISTINCT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
                    s.type, s.file_path, s.working_directory, s.exit_code, s.website_url, s.website_title
             FROM snippets s
             INNER JOIN snippet_categories sc ON s.id = sc.snippet_id
@@ -1919,9 +2044,10 @@ pub async fn get_snippets_by_category(
         .await?
     } else {
         // No filter - get all types
+        log::debug!("Querying snippets for category {} (no content_type filter)", category_id);
         sqlx::query(
             r#"
-            SELECT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
+            SELECT DISTINCT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
                    s.type, s.file_path, s.working_directory, s.exit_code, s.website_url, s.website_title
             FROM snippets s
             INNER JOIN snippet_categories sc ON s.id = sc.snippet_id
@@ -2066,15 +2192,15 @@ pub async fn get_categorization_reasoning(snippet_id: i64) -> Result<Option<Cate
     }
 }
 
-/// Get count of snippets in a category
+/// Get count of snippets directly assigned to a category (excludes children to prevent duplicates)
 pub async fn get_category_snippet_count(category_id: i64, content_type: Option<String>) -> Result<i64> {
     let pool = get_pool().await?;
 
     let count: i64 = if let Some(filter_type) = content_type {
         // Count only snippets of the specified type
-        sqlx::query_scalar(
+        sqlx::query_scalar::<_, i64>(
             r#"
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT s.id)
             FROM snippet_categories sc
             INNER JOIN snippets s ON sc.snippet_id = s.id
             WHERE sc.category_id = ? AND s.type = ?
@@ -2086,9 +2212,9 @@ pub async fn get_category_snippet_count(category_id: i64, content_type: Option<S
         .await?
     } else {
         // Count all snippets
-        sqlx::query_scalar(
+        sqlx::query_scalar::<_, i64>(
             r#"
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT snippet_id)
             FROM snippet_categories
             WHERE category_id = ?
             "#,
@@ -2099,6 +2225,55 @@ pub async fn get_category_snippet_count(category_id: i64, content_type: Option<S
     };
 
     Ok(count)
+}
+
+/// Get all uncategorized screenshots (screenshots without category assignments)
+pub async fn get_uncategorized_screenshots(limit: i64, offset: i64) -> Result<Vec<Snippet>> {
+    let pool = get_pool().await?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT s.id, s.content, s.summary, s.created_at, s.updated_at, s.source_app, s.metadata,
+               s.type, s.file_path, s.working_directory, s.exit_code, s.website_url, s.website_title
+        FROM snippets s
+        WHERE s.type = 'screenshot'
+          AND s.id NOT IN (SELECT snippet_id FROM snippet_categories)
+        ORDER BY s.created_at DESC
+        LIMIT ? OFFSET ?
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&pool)
+    .await
+    .context("Failed to fetch uncategorized screenshots")?;
+
+    let mut snippets = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let created_at = parse_datetime_flexible(row.get(3))?;
+        let updated_at: Option<DateTime<Utc>> = row.try_get::<Option<String>, _>(4).ok().flatten().and_then(|s| {
+            parse_datetime_flexible(s).ok()
+        });
+
+        snippets.push(Snippet {
+            id: row.get(0),
+            content: row.get(1),
+            summary: row.get(2),
+            created_at,
+            updated_at,
+            source_app: row.get(5),
+            metadata: row.get(6),
+            content_type: row.get(7),
+            file_path: row.get(8),
+            working_directory: row.get(9),
+            exit_code: row.get(10),
+            website_url: row.get(11),
+            website_title: row.get(12),
+        });
+    }
+
+    Ok(snippets)
 }
 
 /// Edit an existing snippet (updates content, summary, and updated_at)

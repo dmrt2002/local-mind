@@ -1460,10 +1460,11 @@ pub async fn search_text_in_database(search_text: String) -> Result<serde_json::
 pub async fn rescan_screenshots(app: tauri::AppHandle) -> Result<String, String> {
     use crate::monitors::screenshots;
 
-    // Get job queue from app state
-    let job_queue = app.state::<std::sync::Arc<crate::job_queue::PersistentJobQueue>>();
+    // Get job queue from app state (managed as Arc<PersistentJobQueue>)
+    let job_queue = app.state::<std::sync::Arc<PersistentJobQueue>>();
+    let job_queue_clone = job_queue.inner().clone();
 
-    match screenshots::rescan_existing_screenshots(job_queue.inner().clone()).await {
+    match screenshots::rescan_existing_screenshots(job_queue_clone).await {
         Ok((total, processed, skipped)) => {
             Ok(format!(
                 "Rescan complete: {} total files, {} processed, {} skipped",
@@ -1472,4 +1473,100 @@ pub async fn rescan_screenshots(app: tauri::AppHandle) -> Result<String, String>
         }
         Err(e) => Err(format!("Failed to rescan screenshots: {}", e))
     }
+}
+
+/// Check the status of a screenshot by searching for it in the database
+#[tauri::command]
+pub async fn check_screenshot_status(filename_pattern: String) -> Result<serde_json::Value, String> {
+    use crate::db::sqlite;
+    use std::path::Path;
+    
+    let pool = sqlite::get_pool().await
+        .map_err(|e| format!("Failed to get database pool: {}", e))?;
+    
+    // Search for screenshots matching the filename pattern
+    let query = format!("%{}%", filename_pattern);
+    let results = sqlx::query(
+        r#"
+        SELECT s.id, s.content, s.summary, s.file_path, s.created_at, s.source_app,
+               sc.category_id, c.name as category_name, c.emoji as category_emoji
+        FROM snippets s
+        LEFT JOIN snippet_categories sc ON s.id = sc.snippet_id
+        LEFT JOIN categories c ON sc.category_id = c.id
+        WHERE s.type = 'screenshot'
+          AND (s.content LIKE ? OR s.file_path LIKE ?)
+        ORDER BY s.created_at DESC
+        LIMIT 20
+        "#
+    )
+    .bind(&query)
+    .bind(&query)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search database: {}", e))?;
+    
+    let mut matches = Vec::new();
+    for row in results {
+        let id: i64 = row.get(0);
+        let content: String = row.get(1);
+        let summary: Option<String> = row.get(2);
+        let file_path: Option<String> = row.get(3);
+        let created_at: String = row.get(4);
+        let source_app: Option<String> = row.get(5);
+        let category_id: Option<i64> = row.get(6);
+        let category_name: Option<String> = row.get(7);
+        let category_emoji: Option<String> = row.get(8);
+        
+        // Check if file exists on disk
+        let file_exists = file_path.as_ref()
+            .map(|path| Path::new(path).exists())
+            .unwrap_or(false);
+        
+        matches.push(serde_json::json!({
+            "id": id,
+            "content": content,
+            "summary": summary,
+            "file_path": file_path,
+            "created_at": created_at,
+            "source_app": source_app,
+            "category_id": category_id,
+            "category_name": category_name,
+            "category_emoji": category_emoji,
+            "file_exists": file_exists,
+            "is_categorized": category_id.is_some()
+        }));
+    }
+    
+    Ok(serde_json::json!({
+        "pattern": filename_pattern,
+        "matches": matches,
+        "count": matches.len()
+    }))
+}
+
+/// Get uncategorized screenshots
+#[tauri::command]
+pub async fn get_uncategorized_screenshots(limit: i64, offset: i64) -> Result<Vec<SnippetJson>, String> {
+    let snippets = sqlite::get_uncategorized_screenshots(limit, offset)
+        .await
+        .map_err(|e| format!("Failed to get uncategorized screenshots: {}", e))?;
+
+    Ok(snippets
+        .into_iter()
+        .map(|s| SnippetJson {
+            id: s.id,
+            content: s.content,
+            summary: s.summary,
+            created_at: s.created_at.to_rfc3339(),
+            updated_at: s.updated_at.map(|dt| dt.to_rfc3339()),
+            source_app: s.source_app,
+            metadata: s.metadata,
+            content_type: s.content_type,
+            file_path: s.file_path,
+            working_directory: s.working_directory,
+            exit_code: s.exit_code,
+            website_url: s.website_url,
+            website_title: s.website_title,
+        })
+        .collect())
 }

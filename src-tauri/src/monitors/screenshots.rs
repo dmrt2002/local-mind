@@ -111,8 +111,16 @@ impl ScreenshotMonitor {
 
                             if let Some(&last_modified) = known_files.get(&path) {
                                 if last_modified >= modified {
+                                    log::debug!("⏭️  Screenshot {} already processed (last_modified: {}, current: {})", 
+                                        path.display(), last_modified, modified);
                                     continue; // Already processed
+                                } else {
+                                    log::info!("🔄 Screenshot {} modified (last: {}, current: {}), will reprocess", 
+                                        path.display(), last_modified, modified);
                                 }
+                            } else {
+                                log::info!("📸 New screenshot detected: {} (modified: {})", 
+                                    path.display(), modified);
                             }
 
                             known_files.insert(path.clone(), modified);
@@ -120,10 +128,15 @@ impl ScreenshotMonitor {
                             // Check if already processing
                             let mut processing = processing_files.lock().await;
                             if processing.contains_key(&path) {
+                                log::debug!("⏳ Screenshot {} already being processed, skipping", path.display());
+                                drop(processing);
                                 continue;
                             }
                             processing.insert(path.clone(), Instant::now());
                             drop(processing);
+
+                            log::info!("⏳ Queued screenshot {} for processing (waiting 2s for file write to complete)", 
+                                path.display());
 
                             // Process new screenshot
                             let job_queue_clone = job_queue.clone();
@@ -134,14 +147,17 @@ impl ScreenshotMonitor {
                                 // Wait 2 seconds to ensure file write is complete
                                 tokio::time::sleep(Duration::from_secs(2)).await;
 
+                                log::info!("🚀 Starting to process screenshot: {}", path_clone.display());
                                 if let Err(e) =
                                     Self::handle_new_screenshot(&path_clone, &job_queue_clone).await
                                 {
                                     log::error!(
-                                        "Failed to process screenshot {}: {}",
+                                        "❌ Failed to process screenshot {}: {}",
                                         path_clone.display(),
                                         e
                                     );
+                                } else {
+                                    log::info!("✅ Completed processing screenshot: {}", path_clone.display());
                                 }
 
                                 // Remove from processing
@@ -172,41 +188,55 @@ impl ScreenshotMonitor {
             .unwrap_or(false)
     }
 
-    async fn handle_new_screenshot(
+    pub async fn handle_new_screenshot(
         path: &Path,
         job_queue: &Arc<PersistentJobQueue>,
     ) -> Result<()> {
-        log::info!("📸 New screenshot detected: {}", path.display());
+        log::info!("📸 Processing new screenshot: {}", path.display());
 
         // Read image file and calculate hash for deduplication
+        log::debug!("📖 Reading screenshot file: {}", path.display());
         let image_bytes = std::fs::read(path).context("Failed to read screenshot file")?;
+        log::debug!("📊 Calculating image hash (file size: {} bytes)", image_bytes.len());
         let image_hash = crate::dedup::calculate_image_hash(&image_bytes);
+        log::debug!("🔑 Image hash: {}", image_hash);
 
         // Check if this screenshot already exists
         let pool = sqlite::get_pool().await?;
+        log::debug!("🔍 Checking for duplicate screenshot (hash: {})", image_hash);
         if let Some(existing_id) = crate::dedup::find_duplicate_screenshot(&pool, &image_hash).await? {
-            log::info!("⏭️  Screenshot already exists (ID: {}), skipping duplicate", existing_id);
+            log::info!("⏭️  Screenshot already exists (ID: {}, hash: {}), skipping duplicate", existing_id, image_hash);
             return Ok(());
         }
+        log::debug!("✅ No duplicate found, proceeding with save");
 
         // Copy screenshot to LocalMind managed directory with normalized filename
         // This ensures we have full control over the filename and avoid Unicode issues
+        log::info!("📁 Copying screenshot to managed directory (hash: {})", image_hash);
         let managed_path = Self::copy_to_managed_dir(path, &image_hash).await?;
+        log::info!("✅ Copied to: {}", managed_path.display());
 
         // Extract metadata
+        log::debug!("📋 Extracting metadata from screenshot");
         let metadata = Self::extract_metadata(path).await?;
+        log::debug!("📋 Metadata: {}x{}, {} bytes, source: {:?}", 
+            metadata.width, metadata.height, metadata.file_size, metadata.source_app);
 
         // Save to database with hash (using managed path)
+        log::info!("💾 Saving screenshot to database...");
         let snippet_id = Self::save_screenshot(&managed_path, &metadata, &image_hash).await?;
 
         log::info!(
-            "✅ Saved screenshot {} from {}",
+            "✅ Saved screenshot {} from {} (hash: {})",
             snippet_id,
-            metadata.source_app.as_deref().unwrap_or("unknown")
+            metadata.source_app.as_deref().unwrap_or("unknown"),
+            image_hash
         );
 
         // Process screenshot: OCR + Caption + Embedding
+        log::info!("🔄 Starting screenshot processing pipeline (OCR + Caption + Embedding) for snippet {}", snippet_id);
         screenshot_processor::process_screenshot(snippet_id, &managed_path, job_queue.clone()).await?;
+        log::info!("✅ Screenshot processing pipeline completed for snippet {}", snippet_id);
 
         Ok(())
     }
@@ -398,70 +428,49 @@ pub fn get_default_screenshot_dir() -> Result<PathBuf> {
 }
 
 /// Rescan existing screenshots and process any that aren't in the database
+/// Scans both the managed directory and the Desktop directory for unprocessed screenshots
 /// Returns (total_found, processed, skipped)
 pub async fn rescan_existing_screenshots(job_queue: Arc<PersistentJobQueue>) -> Result<(usize, usize, usize)> {
     log::info!("🔄 Starting rescan of existing screenshots...");
 
-    // Get managed screenshots directory
+    // Get managed screenshots directory (use same path resolution as database)
     let managed_dir = std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("data")
         .join("local-mind")
         .join("screenshots");
 
-    if !managed_dir.exists() {
-        log::warn!("Managed screenshots directory does not exist: {}", managed_dir.display());
-        return Ok((0, 0, 0));
-    }
+    log::info!("📂 Scanning managed directory: {}", managed_dir.display());
+    log::info!("📂 Current working directory: {:?}", std::env::current_dir());
 
-    // Get all existing screenshots from database
-    let pool = sqlite::get_pool().await?;
-    let existing_paths: std::collections::HashSet<PathBuf> = sqlx::query_as::<_, (String,)>(
-        "SELECT file_path FROM snippets WHERE type = 'screenshot' AND file_path IS NOT NULL"
-    )
-    .fetch_all(&pool)
-    .await
-    .context("Failed to query existing screenshots")?
-    .into_iter()
-    .map(|(path_str,)| PathBuf::from(path_str))
-    .collect();
+    // Also get Desktop directory to scan for unprocessed screenshots
+    let desktop_dir = get_default_screenshot_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    log::info!("📂 Also scanning Desktop directory: {}", desktop_dir.display());
 
-    log::info!("📊 Found {} screenshots in database", existing_paths.len());
-
-    // Scan directory for all image files
     let mut total_found = 0;
     let mut processed = 0;
     let mut skipped = 0;
 
-    if let Ok(entries) = std::fs::read_dir(&managed_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
+    // First, scan managed directory
+    if managed_dir.exists() {
+        let (found, proc, skip) = scan_directory(&managed_dir, &job_queue, true).await?;
+        total_found += found;
+        processed += proc;
+        skipped += skip;
+    } else {
+        log::warn!("⚠️  Managed screenshots directory does not exist: {}", managed_dir.display());
+    }
 
-            if !ScreenshotMonitor::is_image_file(&path) {
-                continue;
-            }
-
-            total_found += 1;
-
-            // Check if this file is in the database
-            if existing_paths.contains(&path) {
-                skipped += 1;
-                continue;
-            }
-
-            // File exists on disk but not in database - process it!
-            log::info!("📸 Found orphaned screenshot: {}", path.display());
-
-            match process_orphaned_screenshot(&path, &job_queue).await {
-                Ok(()) => {
-                    processed += 1;
-                    log::info!("✅ Successfully processed orphaned screenshot");
-                }
-                Err(e) => {
-                    log::error!("❌ Failed to process orphaned screenshot {}: {}", path.display(), e);
-                }
-            }
-        }
+    // Then, scan Desktop directory for unprocessed screenshots
+    if desktop_dir.exists() {
+        log::info!("📂 Scanning Desktop directory for unprocessed screenshots...");
+        let (found, proc, skip) = scan_directory(&desktop_dir, &job_queue, false).await?;
+        total_found += found;
+        processed += proc;
+        skipped += skip;
+    } else {
+        log::warn!("⚠️  Desktop directory does not exist: {}", desktop_dir.display());
     }
 
     log::info!(
@@ -470,6 +479,146 @@ pub async fn rescan_existing_screenshots(job_queue: Arc<PersistentJobQueue>) -> 
         processed,
         skipped
     );
+
+    Ok((total_found, processed, skipped))
+}
+
+/// Scan a directory for screenshots and process any that aren't in the database
+/// If is_managed_dir is true, assumes files are already in managed directory format (hash-based filenames)
+/// If false, treats files as source screenshots that need to be copied to managed directory
+async fn scan_directory(
+    dir: &Path,
+    job_queue: &Arc<PersistentJobQueue>,
+    is_managed_dir: bool,
+) -> Result<(usize, usize, usize)> {
+    // Get all existing screenshots from database
+    // For managed directory, use filename-based comparison (hash-based filenames)
+    // For Desktop directory, we'll use content hash comparison
+    let pool = sqlite::get_pool().await?;
+    
+    let existing_filenames: std::collections::HashSet<String> = if is_managed_dir {
+        // For managed directory, compare by filename (hash-based)
+        sqlx::query_as::<_, (String,)>(
+            "SELECT file_path FROM snippets WHERE type = 'screenshot' AND file_path IS NOT NULL"
+        )
+        .fetch_all(&pool)
+        .await
+        .context("Failed to query existing screenshots")?
+        .into_iter()
+        .filter_map(|(path_str,)| {
+            // Extract filename from path (works with both absolute and relative paths)
+            let path = PathBuf::from(&path_str);
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|s| s.to_string())
+        })
+        .collect()
+    } else {
+        // For Desktop directory, we'll check by content hash instead
+        // Get all content hashes from database
+        sqlx::query_as::<_, (Option<String>,)>(
+            "SELECT content_hash FROM snippets WHERE type = 'screenshot' AND content_hash IS NOT NULL"
+        )
+        .fetch_all(&pool)
+        .await
+        .context("Failed to query existing screenshot hashes")?
+        .into_iter()
+        .filter_map(|(hash,)| hash)
+        .collect()
+    };
+
+    log::info!("📊 Found {} existing screenshots in database", existing_filenames.len());
+
+    // Scan directory for all image files
+    let mut total_found = 0;
+    let mut processed = 0;
+    let mut skipped = 0;
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        log::info!("📂 Scanning files in directory: {}", dir.display());
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if !ScreenshotMonitor::is_image_file(&path) {
+                log::debug!("⏭️  Skipping non-image file: {}", path.display());
+                continue;
+            }
+
+            total_found += 1;
+
+            if is_managed_dir {
+                // For managed directory, check by filename
+                let filename = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => {
+                        log::warn!("⚠️  Cannot extract filename from path: {}, skipping", path.display());
+                        skipped += 1;
+                        continue;
+                    }
+                };
+
+                log::info!("🔍 Checking file: {} (filename: {})", path.display(), filename);
+
+                // Check if this filename exists in database
+                if existing_filenames.contains(&filename) {
+                    skipped += 1;
+                    log::info!("⏭️  Skipping {} (filename '{}' already in database)", path.display(), filename);
+                    continue;
+                }
+
+                // File exists on disk but not in database - process it!
+                log::info!("📸 Found orphaned screenshot: {} (filename: '{}' not in database)", path.display(), filename);
+
+                match process_orphaned_screenshot(&path, job_queue).await {
+                    Ok(()) => {
+                        processed += 1;
+                        log::info!("✅ Successfully processed orphaned screenshot");
+                    }
+                    Err(e) => {
+                        log::error!("❌ Failed to process orphaned screenshot {}: {}", path.display(), e);
+                    }
+                }
+            } else {
+                // For Desktop directory, check by content hash
+                log::info!("🔍 Checking file: {}", path.display());
+
+                // Read image and calculate hash
+                match std::fs::read(&path) {
+                    Ok(image_bytes) => {
+                        let image_hash = crate::dedup::calculate_image_hash(&image_bytes);
+                        
+                        if existing_filenames.contains(&image_hash) {
+                            skipped += 1;
+                            log::info!("⏭️  Skipping {} (hash '{}' already in database)", path.display(), image_hash);
+                            continue;
+                        }
+
+                        // New screenshot found - process it through normal pipeline
+                        log::info!("📸 Found new screenshot: {} (hash: '{}' not in database)", path.display(), image_hash);
+                        
+                        match ScreenshotMonitor::handle_new_screenshot(&path, job_queue).await {
+                            Ok(()) => {
+                                processed += 1;
+                                log::info!("✅ Successfully processed new screenshot");
+                            }
+                            Err(e) => {
+                                log::error!("❌ Failed to process screenshot {}: {}", path.display(), e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("❌ Failed to read file {}: {}", path.display(), e);
+                        skipped += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("📊 Scan summary for {}:", dir.display());
+    log::info!("   Total files found: {}", total_found);
+    log::info!("   Files processed: {}", processed);
+    log::info!("   Files skipped: {}", skipped);
 
     Ok((total_found, processed, skipped))
 }

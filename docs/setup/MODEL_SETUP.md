@@ -1,17 +1,20 @@
-# TinyLlama Model Setup Guide
+# LLM Model Setup Guide
 
 ## When Will You Need This?
 
 - **Phase 1 (MVP)**: ❌ **NOT NEEDED** - Only keyword and semantic search are required
-- **Phase 2 (AI Q&A)**: ✅ **REQUIRED** - LLM inference for answering questions
+- **Phase 2 (AI Q&A & Categorization)**: ✅ **REQUIRED** - LLM inference for answering questions and intelligent categorization
 
-You can complete Phase 1 testing without this model. The model is only needed when implementing the "Ask AI" feature.
+You can complete Phase 1 testing without this model. The model is needed for:
+- AI Q&A feature (Ask AI)
+- Intelligent snippet categorization
+- Smart suggestions
 
 ---
 
 ## Quick Setup Steps
 
-### Step 1: Download TinyLlama Model
+### Step 1: Download Qwen2.5-1.5B Model
 
 **Option A: Direct Download (Recommended)**
 
@@ -19,11 +22,14 @@ The model is available on Hugging Face:
 
 ```bash
 # Navigate to models directory
-cd src-tauri/models
+cd src-tauri/models/llm
+
+# Create directory if it doesn't exist
+mkdir -p src-tauri/models/llm
 
 # Download using curl (macOS/Linux)
-curl -L -o TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf \
-  "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+curl -L -o qwen2.5-1.5b-instruct-q3_k_m.gguf \
+  "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q3_K_M.gguf"
 ```
 
 **Option B: Using Hugging Face CLI** (if you have it installed)
@@ -33,18 +39,18 @@ curl -L -o TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf \
 pip install huggingface_hub
 
 # Download the model
-huggingface-cli download TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF \
-  TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf \
-  --local-dir src-tauri/models \
+huggingface-cli download bartowski/Qwen2.5-1.5B-Instruct-GGUF \
+  Qwen2.5-1.5B-Instruct-Q3_K_M.gguf \
+  --local-dir src-tauri/models/llm \
   --local-dir-use-symlinks False
 ```
 
 **Option C: Manual Download**
 
-1. Visit: https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/tree/main
-2. Find `TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf` (about 670MB)
+1. Visit: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/tree/main
+2. Find `Qwen2.5-1.5B-Instruct-Q3_K_M.gguf` (about 940MB)
 3. Click "Download" button
-4. Save to: `src-tauri/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf`
+4. Save to: `src-tauri/models/llm/qwen2.5-1.5b-instruct-q3_k_m.gguf`
 
 ---
 
@@ -52,13 +58,13 @@ huggingface-cli download TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF \
 
 ```bash
 # Check file exists and size
-ls -lh src-tauri/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+ls -lh src-tauri/models/llm/qwen2.5-1.5b-instruct-q3_k_m.gguf
 
 # Expected output:
-# -rw-r--r--  1 user  staff   670M  ...  TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+# -rw-r--r--  1 user  staff   940M  ...  qwen2.5-1.5b-instruct-q3_k_m.gguf
 ```
 
-**Expected file size**: ~670MB (approximately 700,000,000 bytes)
+**Expected file size**: ~940MB (approximately 985,000,000 bytes)
 
 ---
 
@@ -84,25 +90,25 @@ models/*.gguf
 models/*.ggml
 ```
 
-**Note**: The model file is ~670MB, so committing it to git is not recommended unless using Git LFS.
+**Note**: The model file is ~940MB, so committing it to git is not recommended unless using Git LFS.
 
 ---
 
-## Alternative: Smaller Model for Testing
+## Alternative: Different Quantization Levels
 
-If you want a smaller model for initial testing, you could use:
+If you want a different size/quality tradeoff, you could use:
 
-### TinyLlama Q2_K (Smaller, lower quality)
-- **Size**: ~420MB
-- **URL**: https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q2_K.gguf
-- **Quality**: Lower than Q4_K_M, but faster
+### Qwen2.5-1.5B Q2_K (Smaller, lower quality)
+- **Size**: ~600MB
+- **URL**: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q2_K.gguf
+- **Quality**: Lower than Q3_K_M, but faster
 
-### TinyLlama Q8_0 (Higher quality, larger)
-- **Size**: ~1.2GB
-- **URL**: https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q8_0.gguf
-- **Quality**: Better than Q4_K_M, but larger
+### Qwen2.5-1.5B Q4_K_M (Higher quality, larger)
+- **Size**: ~1.0GB
+- **URL**: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+- **Quality**: Better than Q3_K_M, but larger
 
-**Recommendation**: Start with **Q4_K_M** (balanced quality/size)
+**Recommendation**: Start with **Q3_K_M** (balanced quality/size)
 
 ---
 
@@ -113,13 +119,13 @@ Save this as `download_model.sh` in the project root:
 ```bash
 #!/bin/bash
 
-# Download TinyLlama Model
-MODEL_DIR="src-tauri/models"
-MODEL_NAME="TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
-MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/${MODEL_NAME}"
+# Download Qwen2.5-1.5B Model
+MODEL_DIR="src-tauri/models/llm"
+MODEL_NAME="qwen2.5-1.5b-instruct-q3_k_m.gguf"
+MODEL_URL="https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q3_K_M.gguf"
 
-echo "Downloading TinyLlama model..."
-echo "This may take a while (670MB download)..."
+echo "Downloading Qwen2.5-1.5B model..."
+echo "This may take a while (940MB download)..."
 
 mkdir -p "$MODEL_DIR"
 
@@ -149,14 +155,15 @@ chmod +x download_model.sh
 
 ## Model Information
 
-### TinyLlama-1.1B-Chat-v1.0.Q4_K_M
+### Qwen2.5-1.5B-Instruct-Q3_K_M
 
-- **Model Size**: 1.1B parameters
-- **File Size**: ~670MB (quantized)
-- **Quantization**: Q4_K_M (4-bit, medium quality)
+- **Model Size**: 1.5B parameters
+- **File Size**: ~940MB (quantized)
+- **Quantization**: Q3_K_M (3-bit, medium quality)
 - **Context Window**: 2048 tokens
 - **Format**: GGUF (compatible with llama.cpp)
 - **License**: Apache 2.0
+- **Specialization**: Instruction following, categorization tasks
 
 ### Performance Expectations
 
@@ -164,6 +171,7 @@ On a typical CPU (4-core):
 - **First token**: 2-5 seconds
 - **Generation speed**: 1-2 tokens/second
 - **Memory usage**: ~1.5-2GB RAM when loaded
+- **Categorization**: 2-5 seconds per snippet
 
 ---
 
@@ -178,8 +186,9 @@ On a typical CPU (4-core):
 ### Current Status
 
 - ✅ Phase 1 MVP can run without model (keyword + semantic search work)
-- ⏳ Phase 2 requires model (AI Q&A feature)
+- ⏳ Phase 2+ requires model (AI Q&A feature, intelligent categorization)
 - 📦 Model download takes 5-10 minutes depending on internet speed
+- 🤖 Model is used for: snippet categorization, AI Q&A, smart suggestions
 
 ---
 
@@ -196,7 +205,7 @@ On a typical CPU (4-core):
 Check the file hash (if available):
 ```bash
 # Compare with Hugging Face page checksum
-shasum -a 256 src-tauri/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+shasum -a 256 src-tauri/models/llm/qwen2.5-1.5b-instruct-q3_k_m.gguf
 ```
 
 ### Insufficient Space
@@ -210,30 +219,29 @@ shasum -a 256 src-tauri/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 
 Once the model is downloaded:
 
-1. ✅ Place it in `src-tauri/models/`
-2. ✅ Update `tauri.conf.json` to include it in resources
-3. ✅ Test model loading (Phase 2 implementation)
+1. ✅ Place it in `src-tauri/models/llm/`
+2. ✅ Update `tauri.conf.json` to include it in resources (if not already configured)
+3. ✅ Test model loading
 4. ✅ Verify inference works
-5. ✅ Test RAG pipeline
+5. ✅ Test categorization and RAG pipeline
 
 ---
 
 ## Integration Code Reference
 
-When implementing Phase 2, the model will be loaded in:
-- `src-tauri/src/inference/llama.rs` - Model loading and inference
-- `src-tauri/src/inference/loader.rs` - Progressive loading with progress
+The model is loaded in:
+- `src-tauri/src/inference/llm_manager.rs` - Model loading and caching
+- `src-tauri/src/inference/llama.rs` - Model inference
+- `src-tauri/src/inference/categorization.rs` - Categorization prompts
 - `src-tauri/src/commands.rs` - `ask_ai` command handler
-
-The placeholder code is already in place, waiting for the actual model file!
 
 ---
 
 ## Summary
 
 **For Phase 1**: No model needed ✅  
-**For Phase 2**: Download model when ready ⏳  
+**For Phase 2+**: Download model when ready ⏳  
 **Download command**: See Step 1 above  
-**File location**: `src-tauri/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf`
+**File location**: `src-tauri/models/llm/qwen2.5-1.5b-instruct-q3_k_m.gguf`
 
 Happy coding! 🚀

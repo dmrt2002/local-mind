@@ -9,7 +9,6 @@ interface CategoryManagerProps {
 export default function CategoryManager({ onCategoryCreated }: CategoryManagerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState("");
-  const [emoji, setEmoji] = useState("📁");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -30,13 +29,12 @@ export default function CategoryManager({ onCategoryCreated }: CategoryManagerPr
         request: {
           name: name.trim(),
           parent_id: null,
-          emoji: emoji || "📁",
+          emoji: null,
         },
       });
 
       setSuccess(true);
       setName("");
-      setEmoji("📁");
 
       setTimeout(() => {
         setSuccess(false);
@@ -103,20 +101,6 @@ export default function CategoryManager({ onCategoryCreated }: CategoryManagerPr
         </div>
 
         <form onSubmit={handleCreate} className="category-form">
-          <div className="form-group">
-            <label htmlFor="emoji">Icon</label>
-            <input
-              id="emoji"
-              type="text"
-              value={emoji}
-              onChange={(e) => setEmoji(e.target.value.slice(0, 2))}
-              className="emoji-input"
-              placeholder="📁"
-              maxLength={2}
-            />
-            <small>Choose an emoji to represent this category</small>
-          </div>
-
           <div className="form-group">
             <label htmlFor="name">Category Name *</label>
             <input

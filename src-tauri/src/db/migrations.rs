@@ -3,7 +3,7 @@ use log;
 use sqlx::{sqlite::SqlitePool, Row};
 
 /// Current database schema version
-const CURRENT_VERSION: i32 = 18;
+const CURRENT_VERSION: i32 = 19;
 
 /// Migration definitions
 #[derive(Debug)]
@@ -400,9 +400,24 @@ const MIGRATIONS: &[Migration] = &[
             -- Add unique constraint on content_hash for ALL snippet types to prevent duplicates
             -- This prevents duplicates at database level even if application logic fails
             -- Only applies where content_hash IS NOT NULL (allows NULL for legacy data)
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_content_hash_unique 
-            ON snippets(content_hash) 
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_content_hash_unique
+            ON snippets(content_hash)
             WHERE content_hash IS NOT NULL;
+        "#,
+    },
+    Migration {
+        version: 19,
+        name: "update_category_unique_constraint_global",
+        up: r#"
+            -- Drop old unique constraint that was scoped to parent_id
+            DROP INDEX IF EXISTS idx_categories_name_parent_unique;
+
+            -- Add NEW unique constraint on normalized category name GLOBALLY (ignoring parent_id)
+            -- This prevents duplicate categories across different app folders
+            -- Uses LOWER(TRIM(name)) to handle case-insensitive and whitespace variations
+            -- CRITICAL: This enforces canonical categories like "Docker Commands" across all folders
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name_global_unique
+            ON categories(LOWER(REPLACE(REPLACE(TRIM(name), '_', ' '), '-', ' ')));
         "#,
     },
 ];

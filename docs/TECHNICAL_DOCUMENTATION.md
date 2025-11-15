@@ -249,7 +249,8 @@ UI Tree Structure:
    - Parallel fetch of categories + snippets
 
 2. **Snippet Counts**
-   - Shows number of snippets in each category
+   - Shows number of snippets **directly assigned** to each category
+   - Does not include snippets from child categories (prevents duplicates)
    - Updated dynamically
    - Helps users locate content
 
@@ -263,11 +264,24 @@ UI Tree Structure:
    - Visual hierarchy with indentation
    - Selected state highlighting
 
+5. **Content Type Filtering**
+   - Parent categories appear in filters if they have descendants with that content type
+   - When viewing a category, only snippets directly assigned to it are shown
+   - Prevents duplicate snippets appearing in both parent and child views
+
 **Database Queries:**
 - `get_root_categories`: Fetch top-level categories (parent_id = NULL)
 - `get_child_categories`: Fetch children of specific category
-- `get_snippets_by_category`: Fetch snippets in category
+- `get_snippets_by_category`: Fetch snippets **directly assigned** to category (excludes children)
+- `get_category_snippet_count`: Count snippets **directly assigned** to category
+- `get_categories`: When filtering by content type, includes parent categories that have descendants with that type
 - All queries optimized with proper indexing
+
+**Command Categorization:**
+- Uses simplified "{tool} Commands" pattern for consistency
+- Examples: "Docker Commands", "Node Commands", "Kubernetes Commands", "Rust Commands", "Python Commands", "Cloud Commands", "System Commands", "Build Commands"
+- Pattern matching ensures canonical category names are used
+- LLM categorization with fallback to pattern matching for commands
 
 ### Component Layers
 
@@ -289,7 +303,7 @@ UI Tree Structure:
 
 4. **AI Models Layer**
    - **Embedding Model:** all-MiniLM-L6-v2 (384 dimensions)
-   - **LLM Model:** TinyLlama-1.1B-Chat-v1.0 (Q4_K_M quantization)
+   - **LLM Model:** Qwen2.5-1.5B-Instruct (Q3_K_M quantization)
 
 ---
 
@@ -1363,15 +1377,16 @@ User Checks "Ask AI" + Presses Enter
 
 **What it does:** Runs LLM inference on CPU
 
-**Model:** TinyLlama-1.1B-Chat-v1.0.Q4_K_M
-- **Size:** 670MB (quantized)
-- **Quantization:** Q4_K_M (4-bit, medium quality)
+**Model:** Qwen2.5-1.5B-Instruct-Q3_K_M
+- **Size:** ~940MB (quantized)
+- **Quantization:** Q3_K_M (3-bit, medium quality)
 - **Context:** 2048 tokens
 - **Speed:** 1-2 tokens/second on CPU
 
 **Why this model:**
 - Small enough to fit in 2GB RAM
-- Acceptable quality for simple RAG
+- Better instruction following than TinyLlama
+- Good quality for categorization tasks
 - Can run on any CPU
 - Open source
 
@@ -1465,7 +1480,7 @@ local-mind/
 │   └── Cargo.toml        # Rust dependencies
 │
 ├── models/                # AI model files (not in git)
-│   └── TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+│   └── qwen2.5-1.5b-instruct-q3_k_m.gguf
 │
 └── data/                  # Runtime data (not in git)
     ├── snippets.db        # SQLite database
@@ -1588,6 +1603,12 @@ fn bench_fts5_search(c: &mut Criterion) {
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** 2024  
+**Document Version:** 2.0  
+**Last Updated:** 2025  
 **Maintained by:** LocalMind Development Team
+
+**Recent Updates:**
+- Command categorization simplified to "{tool} Commands" pattern
+- Category filtering: categories show only directly assigned snippets (no duplicates)
+- LLM model updated to Qwen2.5-1.5B-Instruct-Q3_K_M
+- Parent categories appear in content type filters if they have descendants with that type

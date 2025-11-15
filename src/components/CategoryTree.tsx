@@ -68,7 +68,6 @@ const TreeNode = memo(
     const [isDragOver, setIsDragOver] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [editName, setEditName] = useState(category.name);
-    const [editEmoji, setEditEmoji] = useState(category.emoji);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isProcessingBlurRef = useRef(false);
@@ -295,9 +294,8 @@ const TreeNode = memo(
         e.stopPropagation();
         setIsEditing(true);
         setEditName(category.name);
-        setEditEmoji(category.emoji);
       },
-      [category.name, category.emoji]
+      [category.name]
     );
 
     const handleSaveEdit = useCallback(async () => {
@@ -313,14 +311,13 @@ const TreeNode = memo(
         console.log("Updating category:", {
           id: category.id,
           name: trimmedName,
-          emoji: editEmoji,
         });
 
         await invoke("update_category", {
           request: {
             id: category.id,
             name: trimmedName,
-            emoji: editEmoji,
+            emoji: null,
           },
         });
 
@@ -328,14 +325,12 @@ const TreeNode = memo(
         setIsEditing(false);
         // Update local state
         category.name = trimmedName;
-        category.emoji = editEmoji;
       } catch (err) {
         console.error("Failed to update category:", err);
         setEditName(category.name);
-        setEditEmoji(category.emoji);
         setIsEditing(false);
       }
-    }, [category, editName, editEmoji]);
+    }, [category, editName]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {
@@ -346,10 +341,9 @@ const TreeNode = memo(
           e.preventDefault();
           setIsEditing(false);
           setEditName(category.name);
-          setEditEmoji(category.emoji);
         }
       },
-      [handleSaveEdit, category.name, category.emoji]
+      [handleSaveEdit, category.name]
     );
 
     const handleBlur = useCallback(() => {
@@ -445,17 +439,6 @@ const TreeNode = memo(
             <div className="category-edit-mode">
               <input
                 type="text"
-                value={editEmoji}
-                onChange={(e) => setEditEmoji(e.target.value)}
-                className="edit-emoji-input"
-                placeholder="📁"
-                maxLength={2}
-                onBlur={handleBlur}
-                onKeyDown={handleKeyDown}
-                onMouseDown={(e) => e.stopPropagation()}
-              />
-              <input
-                type="text"
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 className="edit-name-input"
@@ -483,7 +466,6 @@ const TreeNode = memo(
                 role="button"
                 tabIndex={0}
               >
-                <span className="category-emoji">{category.emoji}</span>
                 <span className="category-name">{category.name}</span>
                 {category.snippet_count !== undefined &&
                   category.snippet_count > 0 && (
@@ -569,7 +551,6 @@ const TreeNode = memo(
                   onClick={() => onSelectSnippet(snippet.id)}
                   title={snippet.content.substring(0, 200)}
                 >
-                  <span className="category-emoji">📄</span>
                   <span className="category-name snippet-name">
                     {snippet.summary ||
                       snippet.content.substring(0, 50) + "..."}

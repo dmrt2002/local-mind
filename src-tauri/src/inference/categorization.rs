@@ -190,91 +190,62 @@ fn build_command_prompt(
 
     format!(
         r#"<|im_start|>system
-You are an expert categorization assistant for terminal commands. Your goal is to maintain a clean, well-organized taxonomy by ALWAYS reusing existing categories.
+You categorize terminal commands by TOOL NAME ONLY. Ignore what the command does - only look at which tool executes it.
 
-🚨 CRITICAL RULES - READ FIRST:
-1. ALWAYS check EXISTING CATEGORIES list FIRST before creating anything new
-2. NEVER create variations like "docker build", "dockercmd", "fileList_with_docker" if "Docker Commands" exists
-3. NEVER create category names with underscores, special characters, or file paths
-4. Use ONLY the EXACT category names from the existing list
-5. If a canonical category exists (e.g., "Docker Commands"), use it - DO NOT create new ones
+🚨 CRITICAL RULE: Extract ONLY the first word of the command (the tool name), ignore everything else.
 
-CRITICAL: THINK LIKE A SENIOR DEVELOPER
-- A senior developer ALWAYS checks existing categories first
-- They NEVER create duplicate categories for the same tool
-- They recognize tool families: "docker", "docker-compose", "docker compose" = ALL "Docker Commands"
-- They use BROAD, canonical categories, NOT specific command names
-- Generic categories like "Software Development" are LAST RESORT only
+TOOL → CATEGORY MAPPING (ONLY these categories allowed):
+- docker, docker-compose → "Docker Commands"
+- node, npm, npx, yarn, pnpm → "Node Commands"
+- git → "Git Commands"
+- kubectl, helm, k9s → "Kubernetes Commands"
+- cargo, rustc, rustup → "Rust Commands"
+- python, pip, poetry → "Python Commands"
+- aws, gcloud, az → "Cloud Commands"
+- ssh, scp, rsync → "System Commands"
+- make, cmake, gradle, mvn → "Build Commands"
+- Everything else → "Commands"
 
-CORE PRINCIPLES:
-1. CHECK EXISTING FIRST: ALWAYS look at EXISTING CATEGORIES list - if a suitable category exists, use it
-2. REUSE OVER CREATE: Only create if NO existing category matches (confidence < 0.50)
-3. BROAD OVER SPECIFIC: Use broad tool categories, NOT specific command names
-4. CANONICAL NAMES ONLY: Use standard category names, never create weird names
+CATEGORIZATION PROCESS:
+1. Extract tool name (first word before space, ignore hyphens: "docker-compose" → "docker")
+2. Look up tool in mapping above
+3. Check if that category exists in EXISTING CATEGORIES list
+4. If exists: use_existing, if not: create_new with exact name from mapping
 
-CANONICAL CATEGORY NAMES (use these if they exist, or create if first time):
-- docker*, docker-compose*, docker compose* → "Docker Commands" 🐳
-- node*, npm*, npx*, yarn*, pnpm* → "Node.js Development" 📦
-- git* → "Git Commands" 🔀
-- kubectl*, helm* → "Kubernetes" ☸️
-- cargo*, rustc* → "Rust Development" 🦀
-- python*, pip* → "Python Development" 🐍
-- aws*, gcloud*, az* → "Cloud CLI" ☁️
-- ssh*, scp*, rsync* → "System Administration" 🔧
-- make*, cmake*, gradle* → "Build Tools" 🔨
+❌ FORBIDDEN - NEVER create categories based on:
+- Command arguments ("api", "deployment", "build", "dev")
+- What the command does ("API Deployment", "CI/CD Scripts")
+- File names or paths
+- Semantic meaning
 
-FORBIDDEN: NEVER create categories like:
-- "docker build" (use "Docker Commands")
-- "dockercmd" (use "Docker Commands")
-- "fileList_with_docker" (use "Docker Commands")
-- Any name with underscores, special chars, or file paths
-- Any variation of an existing category name
+✅ CORRECT Examples:
+- "docker build -t api-service ." → "Docker Commands" (tool: docker)
+- "npm run deploy-api" → "Node Commands" (tool: npm)
+- "git commit -m 'api changes'" → "Git Commands" (tool: git)
 
-{}
+❌ WRONG Examples:
+- "docker build -t api-service ." → "API Deployment" ❌ (semantic, not tool-based)
+- "npm run deploy" → "Deployment Scripts" ❌ (semantic, not tool-based)
 
-EXAMPLES:
-Example 1: Command "docker build -t myapp:latest ." with existing "Docker Commands" → {{"action":"use_existing","category_name":"Docker Commands","emoji":"🐳","reasoning":"Docker command - use existing Docker Commands category","confidence":0.95}}
-Example 2: Command "docker-compose up -d" with existing "Docker Commands" → {{"action":"use_existing","category_name":"Docker Commands","emoji":"🐳","reasoning":"docker-compose is Docker - use existing Docker Commands","confidence":0.95}}
-Example 3: Command "docker compose up -d --build" with existing "Docker Commands" → {{"action":"use_existing","category_name":"Docker Commands","emoji":"🐳","reasoning":"docker compose is Docker - use existing Docker Commands","confidence":0.95}}
-Example 4: Command "npm run test" with existing "Node.js Development" → {{"action":"use_existing","category_name":"Node.js Development","emoji":"📦","reasoning":"npm is Node.js - use existing Node.js Development","confidence":0.95}}
-
-REQUIRED JSON FORMAT (you MUST include ALL these fields):
+REQUIRED JSON FORMAT:
 {{
   "action": "use_existing" or "create_new",
-  "category_name": "Exact category name (TEXT ONLY - NO EMOJIS)",
-  "emoji": "🐳",
-  "reasoning": "Brief explanation of your decision",
+  "category_name": "Exact name from mapping (no emojis)",
+  "reasoning": "Tool-based category",
   "confidence": 0.95
 }}
 
-🚨 CRITICAL: category_name MUST BE TEXT ONLY - NO EMOJIS ALLOWED
-- WRONG: {{"category_name": "🐳 Docker Commands", "emoji": "🐳"}}
-- RIGHT: {{"category_name": "Docker Commands", "emoji": "🐳"}}
-- Emojis belong ONLY in the "emoji" field, NEVER in "category_name"
-
-STEP-BY-STEP CHECKING PROCESS:
-1. Normalize the command: "docker-compose" = "docker compose" = "Docker Compose" (all same)
-2. Check existing categories for case-insensitive match (e.g., "Docker Commands" matches "docker commands")
-3. Check for space/underscore variations: "Docker_compose" = "Docker Compose" = "docker compose"
-4. Only create_new if NO existing category matches after normalization
-5. When using use_existing, use the EXACT category name from the list (case-sensitive)
-
-CRITICAL: You MUST return JSON with ALL 5 fields: action, category_name, emoji, reasoning, confidence.
-
-Respond ONLY with valid JSON (no markdown, no explanation).<|im_end|>
+Respond ONLY with JSON.<|im_end|>
 <|im_start|>user
 EXISTING CATEGORIES ({} total):
 {}
 
-CRITICAL RULE: When using action "use_existing", you MUST use the EXACT category name from the EXISTING CATEGORIES list above.
-
 COMMAND TO CATEGORIZE:
 {}
 
-Now categorize the command above. Respond with ONLY the JSON object:<|im_end|>
+Extract the tool name (first word), map it to the correct category, respond with JSON only:<|im_end|>
 <|im_start|>assistant
 {{"#,
-        COMMAND_GUIDANCE,
         categories.len(),
         categories_list,
         snippet_preview
@@ -388,13 +359,13 @@ KEY PRINCIPLE: Create SPECIFIC, DESCRIPTIVE categories that capture the actual t
 REQUIRED JSON FORMAT (you MUST include ALL these fields):
 {{
   "action": "use_existing" or "create_new",
-  "category_name": "Exact category name (without emoji)",
-  "emoji": "📋",
+  "category_name": "Exact category name (text only, no emojis)",
   "reasoning": "Brief explanation of your decision",
   "confidence": 0.90
 }}
 
-CRITICAL: You MUST return JSON with ALL 5 fields: action, category_name, emoji, reasoning, confidence.
+CRITICAL: You MUST return JSON with ALL 4 fields: action, category_name, reasoning, confidence.
+NOTE: Emoji field is no longer used - categories do not have emojis.
 Do NOT return simplified formats like {{"category": "Name"}} - use the full format above.
 
 Respond ONLY with valid JSON (no markdown, no explanation).<|im_end|>
@@ -513,13 +484,13 @@ Example 3: Caption: "web article", OCR: "Breaking News: Tech Update..." → {{"a
 REQUIRED JSON FORMAT (you MUST include ALL these fields):
 {{
   "action": "use_existing" or "create_new",
-  "category_name": "Exact category name (without emoji)",
-  "emoji": "📰",
+  "category_name": "Exact category name (text only, no emojis)",
   "reasoning": "Brief explanation of your decision",
   "confidence": 0.88
 }}
 
-CRITICAL: You MUST return JSON with ALL 5 fields: action, category_name, emoji, reasoning, confidence.
+CRITICAL: You MUST return JSON with ALL 4 fields: action, category_name, reasoning, confidence.
+NOTE: Emoji field is no longer required - categories do not use emojis.
 
 Respond ONLY with valid JSON (no markdown, no explanation).<|im_end|>
 <|im_start|>user
@@ -645,13 +616,13 @@ CORE PRINCIPLES:
 REQUIRED JSON FORMAT (you MUST include ALL these fields):
 {{
   "action": "use_existing" or "create_new",
-  "category_name": "Exact category name (without emoji)",
-  "emoji": "📁",
+  "category_name": "Exact category name (text only, no emojis)",
   "reasoning": "Brief explanation of your decision",
   "confidence": 0.85
 }}
 
-CRITICAL: You MUST return JSON with ALL 5 fields: action, category_name, emoji, reasoning, confidence.
+CRITICAL: You MUST return JSON with ALL 4 fields: action, category_name, reasoning, confidence.
+NOTE: Emoji field is no longer used - categories do not have emojis.
 
 Respond ONLY with valid JSON (no markdown, no explanation).<|im_end|>
 <|im_start|>user
@@ -681,21 +652,6 @@ Now categorize the content above. Respond with ONLY the JSON object:<|im_end|>
 }
 
 // Content-specific guidance constants
-const COMMAND_GUIDANCE: &str = r#"
-TERMINAL COMMAND SPECIFIC GUIDANCE:
-- STEP 1: Check EXISTING CATEGORIES list - if a matching category exists, use it
-- STEP 2: Identify PRIMARY TOOL from first word (before space/dash)
-- STEP 3: Map to canonical category (see list above)
-- CRITICAL: "docker compose", "docker-compose", "docker" = ALL "Docker Commands"
-- CRITICAL: "node", "npm", "npx", "yarn" = ALL "Node.js Development"
-- NEVER create: "docker build", "dockercmd", "fileList_with_docker" - use "Docker Commands"
-- NEVER create category names with underscores, special chars, or file paths
-- Ignore subcommands, flags, arguments - focus ONLY on the tool name
-- Multi-command chains: use the PRIMARY tool's category
-- Tool prefixes: docker* → "Docker Commands", node*/npm* → "Node.js Development", git* → "Git Commands"
-- If existing category matches tool family → use_existing with confidence 0.90+
-- Only create_new if NO existing category matches the tool family"#;
-
 const SCREENSHOT_GUIDANCE: &str = r#"
 SCREENSHOT SPECIFIC GUIDANCE:
 - Analyze OCR text for content type and visible context
@@ -1072,108 +1028,8 @@ fn validate_category_decision(
         };
     }
 
-    // CRITICAL: For commands, reject invalid category names (underscores, file paths, specific commands)
-    if content_type == Some("command") {
-        let category_lower = decision.category_name.to_lowercase();
-
-        // Check for forbidden patterns in command category names
-        let is_valid_canonical = category_lower == "docker commands"
-            || category_lower == "git commands"
-            || category_lower == "node.js development"
-            || category_lower.contains("kubernetes")
-            || category_lower.contains("rust development")
-            || category_lower.contains("python development")
-            || category_lower.contains("cloud cli")
-            || category_lower.contains("system administration")
-            || category_lower.contains("build tools");
-
-        let has_invalid_pattern = !is_valid_canonical
-            && (category_lower.contains("_")
-            || category_lower.contains("/")
-            || category_lower.contains("\\")
-            || category_lower.contains("filelist")
-            || category_lower.contains("file_list")
-            || (category_lower.starts_with("docker") && category_lower != "docker commands")
-            || (category_lower.contains("docker") && category_lower.len() < 15) // Too short, likely a variation
-            || category_lower == "docker build"
-            || category_lower == "dockercmd");
-
-        if has_invalid_pattern {
-            log::error!(
-                "❌ REJECTED: Invalid command category name '{}' - contains forbidden patterns",
-                decision.category_name
-            );
-
-            // Try to find a matching canonical category
-            let command_lower = snippet_content.to_lowercase();
-            let canonical_category = if command_lower.starts_with("docker")
-                || command_lower.contains("docker-compose")
-                || command_lower.contains("docker compose")
-            {
-                // Look for "Docker Commands" in existing categories
-                existing_categories
-                    .iter()
-                    .find(|c| c.name.to_lowercase() == "docker commands")
-            } else if command_lower.starts_with("git") {
-                existing_categories
-                    .iter()
-                    .find(|c| c.name.to_lowercase() == "git commands")
-            } else if command_lower.starts_with("npm")
-                || command_lower.starts_with("node")
-                || command_lower.starts_with("npx")
-            {
-                existing_categories
-                    .iter()
-                    .find(|c| c.name.to_lowercase().contains("node"))
-            } else {
-                None
-            };
-
-            if let Some(canonical) = canonical_category {
-                log::error!(
-                    "   ✅ Converting to canonical category: '{}'",
-                    canonical.name
-                );
-                decision = CategoryDecision {
-                    action: CategoryAction::UseExisting,
-                    category_name: canonical.name.clone(),
-                    emoji: Some(canonical.emoji.clone()),
-                    reasoning: format!(
-                        "REJECTED invalid category name '{}' - converted to canonical '{}'",
-                        decision.category_name, canonical.name
-                    ),
-                    confidence: 0.90,
-                };
-            } else {
-                // Create a proper canonical category based on the command
-                let (new_category, emoji) = if command_lower.starts_with("docker") {
-                    ("Docker Commands", "🐳")
-                } else if command_lower.starts_with("git") {
-                    ("Git Commands", "🔀")
-                } else if command_lower.starts_with("npm") || command_lower.starts_with("node") {
-                    ("Node.js Development", "📦")
-                } else {
-                    ("Commands", "⚡")
-                };
-
-                log::error!(
-                    "   ✅ Creating proper canonical category: '{}'",
-                    new_category
-                );
-                decision = CategoryDecision {
-                    action: CategoryAction::CreateNew,
-                    category_name: new_category.to_string(),
-                    emoji: Some(emoji.to_string()),
-                    reasoning: format!(
-                        "REJECTED invalid category name '{}' - creating proper canonical category '{}'",
-                        decision.category_name,
-                        new_category
-                    ),
-                    confidence: 0.90,
-                };
-            }
-        }
-    }
+    // NOTE: Whitelist validation removed - pattern matching in job_queue.rs runs BEFORE embedding
+    // This section is kept for future reference but is now bypassed for commands
 
     // CRITICAL: Check if "Documentation" was chosen for business/marketing content
     let category_lower = decision.category_name.to_lowercase();
@@ -1523,7 +1379,7 @@ pub fn get_canonical_category_info(command: &str) -> Option<CanonicalCategory> {
         }),
         "node" | "npm" | "npx" | "yarn" | "pnpm" | "ts-node" | "nodemon" => {
             Some(CanonicalCategory {
-                name: "Node.js Development",
+                name: "Node Commands",
                 emoji: "📦",
             })
         }
@@ -1532,36 +1388,31 @@ pub fn get_canonical_category_info(command: &str) -> Option<CanonicalCategory> {
             emoji: "🔀",
         }),
         "kubectl" | "helm" | "k9s" => Some(CanonicalCategory {
-            name: "Kubernetes",
+            name: "Kubernetes Commands",
             emoji: "☸️",
         }),
         "cargo" | "rustc" | "rustup" => Some(CanonicalCategory {
-            name: "Rust Development",
+            name: "Rust Commands",
             emoji: "🦀",
         }),
         "python" | "pip" | "poetry" => Some(CanonicalCategory {
-            name: "Python Development",
+            name: "Python Commands",
             emoji: "🐍",
         }),
         "aws" | "gcloud" | "az" => Some(CanonicalCategory {
-            name: "Cloud CLI",
+            name: "Cloud Commands",
             emoji: "☁️",
         }),
         "ssh" | "scp" | "rsync" => Some(CanonicalCategory {
-            name: "System Administration",
+            name: "System Commands",
             emoji: "🔧",
         }),
         "make" | "cmake" | "gradle" | "mvn" => Some(CanonicalCategory {
-            name: "Build Tools",
+            name: "Build Commands",
             emoji: "🔨",
         }),
         _ => None,
     }
-}
-
-/// Detect command category name based on tool prefix patterns (for backward compatibility)
-fn detect_command_category(command: &str) -> Option<&'static str> {
-    get_canonical_category_info(command).map(|cat| cat.name)
 }
 
 /// Calculate string similarity (Jaro-Winkler-like simple version)
@@ -1632,35 +1483,6 @@ fn format_categories_enhanced(categories: &[Category]) -> String {
                 "   - {} (emoji: {}, child of {})\n",
                 child.name, child.emoji, category.name
             ));
-        }
-    }
-
-    formatted
-}
-
-/// Format categories for prompt
-fn format_categories(categories: &[Category]) -> String {
-    let mut formatted = String::new();
-
-    // Group by parent/child hierarchy
-    let mut root_categories: Vec<&Category> = categories
-        .iter()
-        .filter(|c| c.parent_id.is_none())
-        .collect();
-    root_categories.sort_by(|a, b| a.name.cmp(&b.name));
-
-    for category in root_categories {
-        formatted.push_str(&format!("- {} {}\n", category.emoji, category.name));
-
-        // Add children
-        let mut children: Vec<&Category> = categories
-            .iter()
-            .filter(|c| c.parent_id == Some(category.id))
-            .collect();
-        children.sort_by(|a, b| a.name.cmp(&b.name));
-
-        for child in children {
-            formatted.push_str(&format!("  - {} {}\n", child.emoji, child.name));
         }
     }
 
@@ -1775,16 +1597,8 @@ fn parse_llm_response(response: &str) -> Result<CategoryDecision> {
         anyhow::bail!("Category name is empty");
     }
 
-    // Default emoji if missing
-    if decision.emoji.is_none()
-        || decision
-            .emoji
-            .as_ref()
-            .map(|s| s.is_empty())
-            .unwrap_or(true)
-    {
-        decision.emoji = Some(default_emoji_for_category(&decision.category_name));
-    }
+    // Emoji is no longer used - set to None
+    decision.emoji = None;
 
     // Clamp confidence
     decision.confidence = decision.confidence.clamp(0.0, 1.0);
@@ -1807,31 +1621,6 @@ fn extract_category_from_simple_json(json_str: &str) -> Option<String> {
     None
 }
 
-/// Get default emoji based on category name
-fn default_emoji_for_category(name: &str) -> String {
-    let name_lower = name.to_lowercase();
-
-    if name_lower.contains("code") || name_lower.contains("snippet") {
-        "💻".to_string()
-    } else if name_lower.contains("doc") || name_lower.contains("guide") {
-        "📚".to_string()
-    } else if name_lower.contains("command") || name_lower.contains("terminal") {
-        "⌨️".to_string()
-    } else if name_lower.contains("link") || name_lower.contains("url") {
-        "🔗".to_string()
-    } else if name_lower.contains("error") || name_lower.contains("bug") {
-        "🐛".to_string()
-    } else if name_lower.contains("task") || name_lower.contains("todo") {
-        "✅".to_string()
-    } else if name_lower.contains("note") {
-        "📝".to_string()
-    } else if name_lower.contains("config") || name_lower.contains("setting") {
-        "⚙️".to_string()
-    } else {
-        "📁".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1844,7 +1633,7 @@ mod tests {
         let decision = parse_llm_response(response).unwrap();
         assert_eq!(decision.action, CategoryAction::CreateNew);
         assert_eq!(decision.category_name, "Python Scripts");
-        assert_eq!(decision.emoji, Some("🐍".to_string()));
+        assert_eq!(decision.emoji, None); // Emoji is no longer used
         assert_eq!(decision.confidence, 0.9);
     }
 
@@ -1878,16 +1667,144 @@ Hope this helps!"#;
             },
         ];
 
-        let formatted = format_categories(&categories);
-        assert!(formatted.contains("💻 Code"));
-        assert!(formatted.contains("🐍 Python"));
+        let formatted = format_categories_enhanced(&categories);
+        assert!(formatted.contains("Code"));
+        assert!(formatted.contains("Python"));
+    }
+}
+
+/// Suggest a category name for content using LLM (simpler version, just name + emoji)
+/// Used when embedding similarity fails and keyword extraction would produce generic names
+pub async fn suggest_category_name_with_llm(
+    model: &LlamaModel,
+    content: &str,
+) -> Result<(String, String)> {
+    // CRITICAL: Check if content is a command first - use canonical category logic
+    // This prevents commands like "docker build api-v2" from being categorized as "Containerized APIs"
+    if let Some(canonical) = get_canonical_category_info(content) {
+        log::info!("🎯 Command detected in suggest_category_name_with_llm, using canonical category: {} {}", canonical.emoji, canonical.name);
+        return Ok((canonical.name.to_string(), canonical.emoji.to_string()));
     }
 
-    #[test]
-    fn test_default_emoji() {
-        assert_eq!(default_emoji_for_category("Python Code"), "💻");
-        assert_eq!(default_emoji_for_category("Documentation"), "📚");
-        assert_eq!(default_emoji_for_category("Terminal Commands"), "⌨️");
-        assert_eq!(default_emoji_for_category("Random Category"), "📁");
+    // Check if content looks like a command (starts with a word that could be a tool)
+    let first_line = content.lines().next().unwrap_or(content).trim();
+    let first_word = first_line.split_whitespace().next().unwrap_or("");
+    let looks_like_command = !first_word.is_empty()
+        && first_word
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        && first_line.len() < 200; // Commands are usually short
+
+    let prompt = if looks_like_command {
+        // COMMAND-SPECIFIC PROMPT: Use first word (tool name) only, ignore arguments
+        format!(
+            r#"You are a categorization assistant for TERMINAL COMMANDS. 
+
+🚨 CRITICAL RULE FOR COMMANDS:
+- Extract ONLY the first word (the tool/command name)
+- IGNORE all arguments, flags, file names, and paths
+- Use the tool name to determine category, NOT what the command does
+
+Command: "{}"
+
+TOOL → CATEGORY MAPPING (use EXACTLY these names):
+- docker, docker-compose → "Docker Commands" 🐳
+- node, npm, npx, yarn, pnpm → "Node Commands" 📦
+- git → "Git Commands" 🔀
+- kubectl, helm, k9s → "Kubernetes Commands" ☸️
+- cargo, rustc, rustup → "Rust Commands" 🦀
+- python, pip, poetry → "Python Commands" 🐍
+- aws, gcloud, az → "Cloud Commands" ☁️
+- ssh, scp, rsync → "System Commands" 🔧
+- make, cmake, gradle, mvn → "Build Commands" 🔨
+- Everything else → "Commands" ⚡
+
+EXAMPLES:
+- "docker build api-v2" → "Docker Commands" (tool: docker, ignore "api-v2")
+- "npm run deploy" → "Node Commands" (tool: npm, ignore "deploy")
+- "git commit -m 'fix'" → "Git Commands" (tool: git, ignore arguments)
+
+❌ FORBIDDEN - NEVER create categories based on:
+- Command arguments ("api-v2", "deploy", "build")
+- What the command does ("API Deployment", "Containerized APIs")
+- File names or paths
+- Semantic meaning of the command
+
+Respond in JSON format:
+{{
+  "category_name": "Exact name from mapping above",
+  "emoji": "Emoji from mapping above"
+}}"#,
+            first_line.chars().take(200).collect::<String>()
+        )
+    } else {
+        // NON-COMMAND PROMPT: General content categorization
+        format!(
+            r#"You are a categorization assistant. Given content, suggest a SHORT category name (2-4 words max) and appropriate emoji.
+
+Content: "{}"
+
+Respond in JSON format with ONLY these fields:
+{{
+  "category_name": "Brief Category Name",
+  "emoji": "📁"
+}}
+
+Rules:
+- Category name must be 2-4 words, descriptive, NOT generic (no "Uncategorized", "Quick Notes", etc.)
+- Extract the main topic/theme from the content
+- Examples: "AI Tools", "Proposal Management", "Business Cases", "Technical Documentation"
+- Emoji should match the category theme
+- Be specific to the content's topic"#,
+            content.chars().take(500).collect::<String>()
+        )
+    };
+
+    let params = LlamaParams {
+        max_tokens: 100,
+        temperature: 0.3,
+        ..Default::default()
+    };
+
+    // Generate response in blocking task (LLM inference is CPU-intensive)
+    let response = tokio::task::spawn_blocking({
+        let model = model.clone();
+        let prompt = prompt.clone();
+        move || model.generate(&prompt, &params)
+    })
+    .await
+    .context("LLM task panicked")??;
+
+    // Extract JSON from response (may have extra text)
+    let json_start = response.find('{').context("No JSON found in response")?;
+    let json_end = response[json_start..]
+        .find('}')
+        .context("No closing brace found")?
+        + json_start
+        + 1;
+    let json_str = &response[json_start..json_end];
+
+    #[derive(Deserialize)]
+    struct CategorySuggestion {
+        category_name: String,
+        emoji: String,
     }
+
+    let suggestion: CategorySuggestion =
+        serde_json::from_str(json_str).context("Failed to parse LLM category suggestion")?;
+
+    // Validate category name is not generic
+    let name_lower = suggestion.category_name.to_lowercase();
+    if name_lower.contains("uncategorized")
+        || name_lower.contains("quick note")
+        || name_lower.contains("general")
+        || suggestion.category_name.trim().is_empty()
+    {
+        anyhow::bail!(
+            "LLM returned generic category name: {}",
+            suggestion.category_name
+        );
+    }
+
+    Ok((suggestion.category_name, suggestion.emoji))
 }

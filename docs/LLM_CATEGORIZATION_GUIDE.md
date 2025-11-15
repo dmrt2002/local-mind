@@ -4,6 +4,22 @@
 
 Your local-mind application now uses a local Qwen2.5-1.5B model for intelligent snippet categorization. This document explains how it works and how to troubleshoot issues.
 
+## Command Categorization
+
+For terminal commands, the system uses a **simplified "{tool} Commands" pattern** for consistency:
+
+- **Docker Commands**: All docker, docker-compose, docker compose variants
+- **Node Commands**: node, npm, npx, yarn, pnpm, ts-node, nodemon
+- **Git Commands**: All git commands
+- **Kubernetes Commands**: kubectl, helm, k9s
+- **Rust Commands**: cargo, rustc, rustup
+- **Python Commands**: python, pip, poetry
+- **Cloud Commands**: aws, gcloud, az
+- **System Commands**: ssh, scp, rsync
+- **Build Commands**: make, cmake, gradle, mvn
+
+The LLM is guided to use these canonical names, and pattern matching ensures commands are categorized correctly even if the LLM suggests variations.
+
 ## How It Works
 
 ### Categorization Flow
@@ -259,7 +275,17 @@ GROUP BY categorization_method;
    git commit -m "Initial commit"
    git push origin main
    ```
-   Expected: Creates "Git Commands" or similar
+   Expected: Creates "Git Commands" (uses simplified "{tool} Commands" pattern)
+   
+   Other command examples:
+   - `docker build -t app .` → "Docker Commands"
+   - `npm install react` → "Node Commands"
+   - `kubectl get pods` → "Kubernetes Commands"
+   - `cargo build` → "Rust Commands"
+   - `python script.py` → "Python Commands"
+   - `aws s3 ls` → "Cloud Commands"
+   - `ssh user@host` → "System Commands"
+   - `make build` → "Build Commands"
 
 ### Check the logs:
 

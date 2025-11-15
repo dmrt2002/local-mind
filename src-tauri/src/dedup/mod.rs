@@ -191,6 +191,23 @@ pub async fn find_duplicate_screenshot(pool: &SqlitePool, hash: &str) -> Result<
     Ok(result)
 }
 
+/// Check if a command with the same content hash exists
+/// For commands, the hash is based on content + working_directory
+pub async fn find_duplicate_command(pool: &SqlitePool, content: &str, working_dir: &str) -> Result<Option<i64>> {
+    let unique_content = format!("{}:{}", content, working_dir);
+    let hash = calculate_content_hash(&unique_content);
+
+    let result: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM snippets WHERE type = 'command' AND content_hash = ? LIMIT 1"
+    )
+    .bind(&hash)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to check for duplicate command")?;
+
+    Ok(result)
+}
+
 /// Find all duplicate groups (snippets with same content hash)
 pub async fn find_all_duplicates(pool: &SqlitePool) -> Result<Vec<DuplicateGroup>> {
     // Ensure all snippets have hashes

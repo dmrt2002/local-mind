@@ -492,319 +492,6 @@ impl JobStatus {
     }
 }
 
-/// Try to categorize snippet using LLM, returns (category_id, confidence, method_name, reasoning) if successful
-async fn try_llm_categorization(snippet_id: i64, content: &str, pool: &SqlitePool) -> Option<(i64, f32, String, String)> {
-    use crate::inference::{categorization, global_llm};
-
-    // Get global LLM manager
-    let llm_manager = match global_llm::get_global_llm() {
-        Some(manager) => manager,
-        None => {
-            log::debug!("LLM not available for categorization");
-            return None;
-        }
-    };
-
-    // Check if model exists
-    if !llm_manager.model_exists() {
-        log::debug!("LLM model file not found");
-        return None;
-    }
-
-    // Get existing categories (pass None to get all categories)
-    let categories = match crate::db::sqlite::get_categories(None, None).await {
-        Ok(cats) => cats,
-        Err(e) => {
-            log::warn!("Failed to get categories for LLM: {}", e);
-            return None;
-        }
-    };
-
-    // Get LLM model (lazy loading)
-    let model = match llm_manager.get_model() {
-        Ok(m) => m,
-        Err(e) => {
-            log::warn!("Failed to load LLM model: {}", e);
-            return None;
-        }
-    };
-
-    println!("🤖 Using LLM for smart categorization...");
-    log::info!("🤖 Using LLM for categorization of snippet {}", snippet_id);
-
-    // Get snippet type and source information for content-aware categorization
-    let row_result = sqlx::query(
-        "SELECT type, website_url, website_title FROM snippets WHERE id = ?"
-    )
-    .bind(snippet_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (content_type, website_url, website_title) = if let Some(row) = row_result {
-        (
-            row.try_get::<Option<String>, _>(0).ok().flatten(),
-            row.try_get::<Option<String>, _>(1).ok().flatten(),
-            row.try_get::<Option<String>, _>(2).ok().flatten(),
-        )
-    } else {
-        (None, None, None)
-    };
-
-    log::info!("📋 Snippet {} categorization context:", snippet_id);
-    log::info!("   Content Type: {:?}", content_type);
-    log::info!("   Website URL: {:?}", website_url);
-    log::info!("   Website Title: {:?}", website_title);
-    log::info!("   Content Preview: {}", content.chars().take(150).collect::<String>());
-
-    // Call LLM categorization with content type and source information
-    let decision = match categorization::categorize_with_llm(
-        &model, 
-        content, 
-        &categories, 
-        content_type.as_deref(),
-        website_url.as_deref(),
-        website_title.as_deref(),
-    ).await {
-        Ok(d) => d,
-        Err(e) => {
-            log::warn!("LLM categorization failed: {}", e);
-            println!("⚠️  LLM categorization failed: {}, falling back to semantic search", e);
-            return None;
-        }
-    };
-
-    println!("🤖 LLM decision: {:?} category '{}' (confidence: {:.2})",
-             decision.action, decision.category_name, decision.confidence);
-    log::info!("✅ LLM categorization result: {:?}", decision);
-    
-    // CRITICAL: Final validation check - if category name is still invalid after validation, fall back
-    let category_trimmed = decision.category_name.trim();
-    let category_lower = category_trimmed.to_lowercase();
-    let word_count = category_trimmed.split_whitespace().count();
-    let has_letter = category_trimmed.chars().any(|c| c.is_alphabetic());
-    let is_all_uppercase = category_trimmed.chars().all(|c| !c.is_lowercase());
-    let is_alphanumeric_code = category_trimmed.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '-')
-        && category_trimmed.chars().filter(|c| c.is_alphabetic()).count() <= 3
-        && category_trimmed.chars().any(|c| c.is_numeric());
-    
-    let valid_single_words = [
-        "documentation", "commands", "code", "notes", "links", "research",
-        "news", "articles", "personal", "ideas", "shopping", "social",
-    ];
-    let is_valid_single_word = word_count == 1 && valid_single_words.contains(&category_lower.as_str());
-    
-    let is_still_invalid = category_trimmed.len() < 3
-        || (is_all_uppercase && category_trimmed.len() < 5 && category_trimmed.len() >= 2)
-        || (word_count < 2 && !is_valid_single_word)
-        || is_alphanumeric_code
-        || !has_letter;
-    
-    if is_still_invalid {
-        log::error!(
-            "❌ CRITICAL: LLM returned invalid category name '{}' even after validation - falling back to semantic similarity",
-            decision.category_name
-        );
-        println!("⚠️  LLM returned invalid category name '{}' - falling back to semantic similarity", decision.category_name);
-        return None;
-    }
-    
-    // Special logging for "Documentation" category to help debug misclassifications
-    let category_lower = decision.category_name.to_lowercase();
-    if category_lower.contains("documentation") {
-        log::warn!("📄 LLM chose 'Documentation' category - verifying this is correct:");
-        log::warn!("   Content type: {:?}", content_type);
-        log::warn!("   Website URL: {:?}", website_url);
-        log::warn!("   Website Title: {:?}", website_title);
-        log::warn!("   Reasoning: {}", decision.reasoning);
-        log::warn!("   Content preview: {}", content.chars().take(200).collect::<String>());
-        
-        // Check for business keywords
-        let content_lower = content.to_lowercase();
-        let business_indicators = [
-            ("case study", content_lower.contains("case study")),
-            ("partnership", content_lower.contains("partnership")),
-            ("harnesses", content_lower.contains("harnesses")),
-            ("transformed", content_lower.contains("transformed")),
-            ("discover", content_lower.contains("discover")),
-            ("company name", content_lower.split_whitespace().any(|w| {
-                w.len() > 2 && w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-            })),
-        ];
-        
-        let found_indicators: Vec<_> = business_indicators.iter()
-            .filter(|(_, found)| *found)
-            .map(|(name, _)| name)
-            .collect();
-        
-        if !found_indicators.is_empty() {
-            log::warn!("   ⚠️  WARNING: Found business indicators: {:?}", found_indicators);
-            log::warn!("   This may be incorrectly categorized as Documentation!");
-        } else {
-            log::info!("   ✓ No obvious business indicators found - Documentation category may be correct");
-        }
-    }
-
-    // FINAL SAFETY CHECK: Verify UseExisting category actually exists
-    // (This should have been caught by validate_category_decision, but double-check here)
-    if matches!(decision.action, categorization::CategoryAction::UseExisting) {
-        let category_name_lower = decision.category_name.to_lowercase();
-        let category_exists = categories
-            .iter()
-            .any(|c| c.name.to_lowercase() == category_name_lower);
-        
-        if !category_exists {
-            log::error!(
-                "CRITICAL: LLM suggested UseExisting for '{}' but validation failed - category doesn't exist! Available categories: {}",
-                decision.category_name,
-                categories.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
-            );
-            // This should not happen if validate_category_decision worked correctly
-            // But if it does, fall back to semantic similarity
-            println!("⚠️  LLM validation error: category '{}' doesn't exist, falling back to semantic similarity", decision.category_name);
-            return None;
-        }
-    }
-
-    let reasoning = decision.reasoning.clone();
-
-    // Handle LLM decision
-    match decision.action {
-        categorization::CategoryAction::UseExisting => {
-            // Find the category by name (case-insensitive exact match first)
-            let category_name_lower = decision.category_name.to_lowercase();
-            if let Some(category) = categories.iter().find(|c| c.name.to_lowercase() == category_name_lower) {
-                println!("✅ LLM matched existing category: {} (ID: {})", category.name, category.id);
-                Some((category.id, decision.confidence, "llm".to_string(), reasoning))
-            } else {
-                // Try fuzzy matching when exact match fails
-                let mut best_match: Option<(&crate::db::sqlite::Category, f32)> = None;
-                for cat in categories.iter() {
-                    let similarity = categorization::string_similarity(&decision.category_name, &cat.name);
-                    if similarity > 0.80 {
-                        // Found a similar category
-                        if let Some((_, best_sim)) = best_match {
-                            if similarity > best_sim {
-                                best_match = Some((cat, similarity));
-                            }
-                        } else {
-                            best_match = Some((cat, similarity));
-                        }
-                    }
-                }
-                
-                if let Some((category, similarity)) = best_match {
-                    println!("✅ LLM fuzzy-matched existing category: {} (ID: {}, similarity: {:.2})", 
-                             category.name, category.id, similarity);
-                    log::info!("LLM suggested '{}' but matched '{}' via fuzzy matching (similarity: {:.2})", 
-                               decision.category_name, category.name, similarity);
-                    Some((category.id, decision.confidence, "llm_fuzzy".to_string(), reasoning))
-                } else {
-                    log::warn!("LLM suggested category '{}' but it doesn't exist (no fuzzy match found)", decision.category_name);
-                    None
-                }
-            }
-        }
-        categorization::CategoryAction::CreateNew => {
-            // Create new category with LLM-suggested name and emoji
-            println!("🆕 LLM suggests creating new category: {} {}",
-                     decision.emoji.as_deref().unwrap_or("📁"), decision.category_name);
-
-            // Get snippet's source_app for hierarchy
-            let source_app: Option<String> = sqlx::query_scalar(
-                "SELECT source_app FROM snippets WHERE id = ?"
-            )
-            .bind(snippet_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
-            // Get or create app folder
-            let parent_id = if let Some(ref app) = source_app {
-                match crate::db::sqlite::get_or_create_app_folder(app).await {
-                    Ok(folder_id) => Some(folder_id),
-                    Err(e) => {
-                        log::warn!("Failed to get/create app folder: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            // Check if category with this name already exists (case-insensitive, normalized)
-            match crate::db::sqlite::get_categories(Some(parent_id), None).await {
-                Ok(existing) => {
-                    // Normalize category name for comparison (lowercase, normalize spaces/underscores)
-                    let normalize_name = |name: &str| -> String {
-                        name.to_lowercase()
-                            .replace("_", " ")
-                            .replace("-", " ")
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .trim()
-                            .to_string()
-                    };
-                    
-                    let normalized_new = normalize_name(&decision.category_name);
-                    
-                    // Check for exact match after normalization
-                    if let Some(cat) = existing.iter().find(|c| normalize_name(&c.name) == normalized_new) {
-                        println!("✅ Category already exists: {} (ID: {})", cat.name, cat.id);
-                        log::warn!("⚠️  DUPLICATE PREVENTED: LLM wanted to create '{}' but '{}' already exists (normalized match: '{}')",
-                                   decision.category_name, cat.name, normalized_new);
-                        Some((cat.id, decision.confidence, "llm".to_string(), reasoning))
-                    } else {
-                        // Check for fuzzy match (similarity > 0.85)
-                        let mut found_duplicate = None;
-                        for cat in existing.iter() {
-                            let normalized_existing = normalize_name(&cat.name);
-                            let similarity = categorization::string_similarity(&normalized_new, &normalized_existing);
-                            if similarity > 0.85 && similarity < 1.0 {
-                                found_duplicate = Some((cat, similarity));
-                                break;
-                            }
-                        }
-                        
-                        if let Some((cat, similarity)) = found_duplicate {
-                            println!("✅ Similar category already exists: {} (ID: {}, similarity: {:.0}%)", 
-                                     cat.name, cat.id, similarity * 100.0);
-                            log::warn!("⚠️  SIMILAR CATEGORY PREVENTED: LLM wanted to create '{}' but '{}' already exists ({:.0}% similar)",
-                                       decision.category_name, cat.name, similarity * 100.0);
-                            Some((cat.id, decision.confidence, "llm".to_string(), reasoning))
-                        } else {
-                            // Create new category
-                            match crate::db::sqlite::create_category(
-                                decision.category_name.clone(),
-                                parent_id,
-                                decision.emoji.clone()
-                            ).await {
-                                Ok(new_id) => {
-                                    println!("✅ Created new category (LLM): {} {} (ID: {})",
-                                             decision.emoji.as_deref().unwrap_or("📁"),
-                                             decision.category_name,
-                                             new_id);
-                                    Some((new_id, decision.confidence, "llm".to_string(), reasoning))
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to create LLM-suggested category: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!("Failed to check existing categories: {}", e);
-                    None
-                }
-            }
-        }
-    }
-}
 
 /// Background worker that processes embedding jobs with batching
 async fn worker_loop(pool: SqlitePool, mut rx: mpsc::Receiver<Job>) {
@@ -932,55 +619,135 @@ async fn process_batch(
                     println!("🏷️  Auto-categorizing snippet {}", job.snippet_id);
                     log::info!("🏷️  Auto-categorizing snippet {}", job.snippet_id);
 
-                    // Try LLM categorization first
-                    let llm_result = try_llm_categorization(job.snippet_id, &job.content, &pool).await;
+                    // CRITICAL: Check snippet type FIRST to determine categorization strategy
+                    let snippet_type: Option<String> = sqlx::query_scalar(
+                        "SELECT type FROM snippets WHERE id = ?"
+                    )
+                    .bind(job.snippet_id)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
 
-                    // Check if LLM categorization succeeded
-                    if let Some((category_id, confidence, method, reasoning)) = llm_result {
-                        println!("✅ LLM categorization successful: category {} (confidence: {:.2})", category_id, confidence);
+                    // For COMMANDS: Use pattern matching ONLY, skip embedding categorization entirely
+                    // This prevents commands from matching to bad existing categories like "Docker Build", "Docker Compose Build", etc.
+                    if snippet_type.as_deref() == Some("command") {
+                        println!("⚡ Command detected - using pattern matching for categorization (skipping embedding)");
+                        log::info!("⚡ Command detected for snippet {} - using pattern matching only", job.snippet_id);
 
-                        // Use new function that tracks method and reasoning
-                        if let Err(e) = crate::db::sqlite::assign_snippet_to_category_with_method(
-                            job.snippet_id,
-                            category_id,
-                            confidence as f64,
-                            false, // not manual
-                            &method,
-                            Some(reasoning),
-                        ).await {
-                            println!("⚠️  Failed to assign snippet {} to category {}: {}", job.snippet_id, category_id, e);
-                            log::warn!("Failed to assign snippet {} to category {}: {}", job.snippet_id, category_id, e);
+                        use crate::inference::categorization;
+                        let (category_name, emoji) = if let Some(canonical) = categorization::get_canonical_category_info(&job.content) {
+                            println!("🎯 Pattern-matched canonical category: {} {}", canonical.emoji, canonical.name);
+                            log::info!("Pattern-matched canonical category '{}' for command snippet {}", canonical.name, job.snippet_id);
+                            (canonical.name.to_string(), canonical.emoji.to_string())
                         } else {
-                            println!("✅ Snippet {} assigned to category {} via LLM", job.snippet_id, category_id);
+                            // For non-canonical commands, use generic "Commands" category
+                            println!("🎯 Using generic 'Commands' category for non-canonical command");
+                            log::info!("Non-canonical command, using generic 'Commands' category for snippet {}", job.snippet_id);
+                            ("Commands".to_string(), "⚡".to_string())
+                        };
+
+                        // Jump directly to category creation (skip embedding categorization)
+                        // We'll handle this inline here
+                        println!("🆕 Finding or creating category: {} {}", emoji, category_name);
+
+                        // Check if category already exists GLOBALLY
+                        match crate::db::sqlite::get_categories(None, None).await {
+                            Ok(existing_categories) => {
+                                let normalize_name = |name: &str| -> String {
+                                    name.to_lowercase()
+                                        .replace("_", " ")
+                                        .replace("-", " ")
+                                        .split_whitespace()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .trim()
+                                        .to_string()
+                                };
+
+                                let normalized_search = normalize_name(&category_name);
+                                let existing = existing_categories.iter().find(|c|
+                                    normalize_name(&c.name) == normalized_search
+                                );
+
+                                let category_id = if let Some(cat) = existing {
+                                    println!("✅ Using existing category: {} (ID: {})", cat.name, cat.id);
+                                    cat.id
+                                } else {
+                                    // Create new category (no parent_id for commands to keep them at root level)
+                                    match crate::db::sqlite::create_category(
+                                        category_name.clone(),
+                                        None, // No parent for command categories
+                                        Some(emoji.clone())
+                                    ).await {
+                                        Ok(new_id) => {
+                                            println!("✅ Created new category: {} {} (ID: {})", emoji, category_name, new_id);
+                                            new_id
+                                        }
+                                        Err(e) => {
+                                            println!("⚠️  Failed to create category: {}", e);
+                                            log::error!("Failed to create category: {}", e);
+                                            -1
+                                        }
+                                    }
+                                };
+
+                                // Assign snippet to category
+                                if category_id > 0 {
+                                    if let Err(e) = crate::db::sqlite::assign_snippet_to_category_with_method(
+                                        job.snippet_id,
+                                        category_id,
+                                        0.95, // High confidence for pattern-matched categories
+                                        false,
+                                        "pattern_match",
+                                        None,
+                                    ).await {
+                                        println!("⚠️  Failed to assign snippet {} to category {}: {}", job.snippet_id, category_id, e);
+                                    } else {
+                                        println!("✅ Snippet {} assigned to category {} {} via pattern matching", job.snippet_id, emoji, category_name);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("⚠️  Failed to get existing categories: {}", e);
+                                log::error!("Failed to get existing categories: {}", e);
+                            }
                         }
                     } else {
-                        // Fall back to semantic similarity
-                        println!("🔍 Falling back to semantic similarity categorization...");
-                        let categorization_result = crate::embedding::categorization::categorize_snippet(job.snippet_id, 0.75).await;
+                        // For NON-COMMANDS: Use embedding-based categorization (faster, more accurate)
+                        // For screenshots, use a lower confidence threshold (0.65) since they have good summaries
+                        let min_confidence = if snippet_type.as_deref() == Some("screenshot") {
+                            log::info!("📸 Using lower confidence threshold (0.65) for screenshot categorization");
+                            0.65
+                        } else {
+                            0.75
+                        };
+
+                        println!("🔍 Using embedding similarity categorization (min_confidence: {:.2})...", min_confidence);
+                        let categorization_result = crate::embedding::categorization::categorize_snippet(job.snippet_id, min_confidence).await;
 
                         match categorization_result {
-                            Ok(Some((category_id, confidence))) => {
-                                println!(
-                                    "✅ Snippet {} auto-categorized to category {} (confidence: {:.2})",
-                                    job.snippet_id,
-                                    category_id,
-                                    confidence
-                                );
-                                log::info!(
-                                    "✅ Snippet {} auto-categorized to category {} (confidence: {:.2})",
-                                    job.snippet_id,
-                                    category_id,
-                                    confidence
-                                );
-                                // Assign the snippet to the category using new function
-                                if let Err(e) = crate::db::sqlite::assign_snippet_to_category_with_method(
-                                    job.snippet_id,
-                                    category_id,
-                                    confidence as f64,
-                                    false, // not manual
-                                    "embedding",
-                                    None,
-                                ).await {
+                        Ok(Some((category_id, confidence))) => {
+                            println!(
+                                "✅ Snippet {} auto-categorized to category {} (confidence: {:.2})",
+                                job.snippet_id,
+                                category_id,
+                                confidence
+                            );
+                            log::info!(
+                                "✅ Snippet {} auto-categorized to category {} via embedding similarity (confidence: {:.2})",
+                                job.snippet_id,
+                                category_id,
+                                confidence
+                            );
+                            // Assign the snippet to the category using new function
+                            if let Err(e) = crate::db::sqlite::assign_snippet_to_category_with_method(
+                                job.snippet_id,
+                                category_id,
+                                confidence as f64,
+                                false, // not manual
+                                "embedding",
+                                None,
+                            ).await {
                                 println!(
                                     "⚠️  Failed to assign snippet {} to category {}: {}",
                                     job.snippet_id,
@@ -994,45 +761,111 @@ async fn process_batch(
                                     e
                                 );
                             } else {
-                                println!("✅ Snippet {} assigned to category {}", job.snippet_id, category_id);
+                                println!("✅ Snippet {} assigned to category {} via embedding similarity", job.snippet_id, category_id);
                             }
                         }
                         Ok(None) => {
                             println!(
-                                "ℹ️  No suitable category found for snippet {} - creating new category from content",
-                                job.snippet_id
+                                "ℹ️  No suitable category found for snippet {} (confidence < {:.2}) - creating new category from content",
+                                job.snippet_id,
+                                min_confidence
                             );
                             log::info!(
-                                "No suitable category found for snippet {} - creating new category",
-                                job.snippet_id
+                                "No suitable category found for snippet {} (confidence < {:.2}) - creating new category",
+                                job.snippet_id,
+                                min_confidence
                             );
 
                             // IMPORTANT: For commands, try pattern matching FIRST before keyword suggestion
-                            // Get snippet type to check if it's a command
-                            let snippet_type: Option<String> = sqlx::query_scalar(
-                                "SELECT type FROM snippets WHERE id = ?"
-                            )
-                            .bind(job.snippet_id)
-                            .fetch_optional(pool)
-                            .await
-                            .unwrap_or(None);
+                            // snippet_type was already queried above, reuse it
+
+                            // For screenshots, prefer using summary (cleaned and meaningful) over raw content
+                            // The summary is already processed and contains the actual topic (e.g., "Deploy workflow to Coolify")
+                            let content_for_suggestion = if snippet_type.as_deref() == Some("screenshot") {
+                                if let Some(ref summary) = job.summary {
+                                    // Use summary if it's meaningful (not just "Screenshot" or too short)
+                                    if !summary.is_empty() 
+                                        && summary.len() > 10 
+                                        && !summary.eq_ignore_ascii_case("screenshot")
+                                        && !summary.starts_with("Screenshot") {
+                                        log::info!("📸 Using summary for screenshot category suggestion: '{}'", summary);
+                                        summary.as_str()
+                                    } else {
+                                        log::debug!("📸 Summary too generic, using content for screenshot category suggestion");
+                                        &job.content
+                                    }
+                                } else {
+                                    log::debug!("📸 No summary available, using content for screenshot category suggestion");
+                                    &job.content
+                                }
+                            } else {
+                                &job.content
+                            };
 
                             let (category_name, emoji) = if snippet_type.as_deref() == Some("command") {
-                                // Try canonical pattern matching for commands
+                                // CRITICAL: Commands MUST use pattern matching ONLY
+                                // DO NOT fall back to keyword suggestion or LLM for commands
+                                // This prevents hallucination and ensures canonical categories
                                 use crate::inference::categorization;
                                 if let Some(canonical) = categorization::get_canonical_category_info(&job.content) {
                                     println!("🎯 Pattern-matched canonical category: {} {}", canonical.emoji, canonical.name);
                                     log::info!("Pattern-matched canonical category '{}' for command snippet {}", canonical.name, job.snippet_id);
                                     (canonical.name.to_string(), canonical.emoji.to_string())
                                 } else {
-                                    // Fall back to keyword suggestion for non-canonical commands
-                                    use crate::embedding::category_suggestion;
-                                    category_suggestion::suggest_category_from_content(&job.content)
+                                    // For non-canonical commands, use generic "Commands" category
+                                    // This prevents creating fragmented categories like "ls Commands", "cat Commands", etc.
+                                    println!("🎯 Using generic 'Commands' category for non-canonical command");
+                                    log::info!("Non-canonical command, using generic 'Commands' category for snippet {}", job.snippet_id);
+                                    ("Commands".to_string(), "⚡".to_string())
                                 }
                             } else {
-                                // For non-command content, use keyword suggestion
-                                use crate::embedding::category_suggestion;
-                                category_suggestion::suggest_category_from_content(&job.content)
+                                // For non-command content (including screenshots), try LLM first, then fall back to keywords
+                                // This prevents generic "Uncategorized" or "Notes" names for novel content
+                                // For screenshots with good summaries, LLM will work much better
+
+                                // Try LLM category name suggestion (especially important for screenshots)
+                                let llm_result = {
+                                    use crate::inference::{categorization, global_llm};
+
+                                    if let Some(llm_manager) = global_llm::get_global_llm() {
+                                        if llm_manager.model_exists() {
+                                            match llm_manager.get_model() {
+                                                Ok(model) => {
+                                                    if snippet_type.as_deref() == Some("screenshot") {
+                                                        println!("🤖 Using LLM to suggest category name from screenshot summary...");
+                                                        log::info!("🤖 Using LLM for screenshot category suggestion (summary: '{}')", content_for_suggestion);
+                                                    } else {
+                                                        println!("🤖 Using LLM to suggest category name...");
+                                                    }
+                                                    categorization::suggest_category_name_with_llm(&model, content_for_suggestion).await.ok()
+                                                }
+                                                Err(e) => {
+                                                    log::debug!("Failed to load LLM model: {}", e);
+                                                    None
+                                                }
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                if let Some((name, emoji)) = llm_result {
+                                    println!("✅ LLM suggested category: {} {}", emoji, name);
+                                    (name, emoji)
+                                } else {
+                                    // Fall back to keyword extraction
+                                    if snippet_type.as_deref() == Some("screenshot") {
+                                        println!("📝 Falling back to keyword extraction for screenshot category name (from summary)");
+                                        log::info!("📝 Using keyword extraction for screenshot with content: '{}'", content_for_suggestion);
+                                    } else {
+                                        println!("📝 Falling back to keyword extraction for category name");
+                                    }
+                                    use crate::embedding::category_suggestion;
+                                    category_suggestion::suggest_category_from_content(content_for_suggestion)
+                                }
                             };
 
                             println!("🆕 Creating new category: {} {}", emoji, category_name);
@@ -1071,33 +904,109 @@ async fn process_batch(
                                 None // No source app, create at root level
                             };
 
-                            // Check if category already exists with this name under the same parent
-                            match crate::db::sqlite::get_categories(Some(parent_id), None).await {
+                            // CRITICAL FIX: Check if category already exists GLOBALLY (not just under parent)
+                            // This prevents creating duplicate "Docker Commands" under different app folders
+                            match crate::db::sqlite::get_categories(None, None).await {
                                 Ok(existing_categories) => {
-                                    let existing = existing_categories.iter().find(|c| c.name == category_name);
+                                    // Normalize category names for comparison (case-insensitive, trim spaces/underscores)
+                                    let normalize_name = |name: &str| -> String {
+                                        name.to_lowercase()
+                                            .replace("_", " ")
+                                            .replace("-", " ")
+                                            .split_whitespace()
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                            .trim()
+                                            .to_string()
+                                    };
+
+                                    let normalized_search = normalize_name(&category_name);
+                                    let existing = existing_categories.iter().find(|c|
+                                        normalize_name(&c.name) == normalized_search
+                                    );
 
                                     let category_id = if let Some(cat) = existing {
-                                        println!("✅ Using existing category: {} (ID: {})", category_name, cat.id);
+                                        println!("✅ Using existing category: {} (ID: {})", cat.name, cat.id);
                                         cat.id
                                     } else {
-                                        // Create new category under app folder
-                                        match crate::db::sqlite::create_category(
-                                            category_name.clone(),
-                                            parent_id,
-                                            Some(emoji.clone())
-                                        ).await {
-                                            Ok(new_id) => {
-                                                if let Some(app) = source_app {
-                                                    println!("✅ Created new category: {} / {} {} (ID: {})", app, emoji, category_name, new_id);
-                                                } else {
-                                                    println!("✅ Created new category: {} {} (ID: {})", emoji, category_name, new_id);
+                                        // RACE CONDITION FIX: Use transaction to prevent duplicate creation
+                                        // Between checking and creating, another job might create the same category
+                                        // CRITICAL: Use main database pool, not job_queue pool
+                                        match crate::db::sqlite::get_pool().await {
+                                            Ok(main_pool) => {
+                                                match main_pool.begin().await {
+                                                    Ok(mut tx) => {
+                                                        // Re-check inside transaction to prevent race condition
+                                                        let recheck_result: Result<Option<i64>, sqlx::Error> = sqlx::query_scalar(
+                                                            "SELECT id FROM categories WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))"
+                                                        )
+                                                        .bind(&category_name)
+                                                        .fetch_optional(&mut *tx)
+                                                        .await;
+
+                                                        match recheck_result {
+                                                            Ok(Some(existing_id)) => {
+                                                                // Category was created by another job, use it
+                                                                let _ = tx.commit().await;
+                                                                println!("✅ Using category created by concurrent job: {} (ID: {})", category_name, existing_id);
+                                                                existing_id
+                                                            }
+                                                            Ok(None) => {
+                                                                // Still doesn't exist, create it inside transaction
+                                                                let insert_result: Result<i64, sqlx::Error> = sqlx::query_scalar(
+                                                                    "INSERT INTO categories (name, parent_id, emoji) VALUES (?, ?, ?) RETURNING id"
+                                                                )
+                                                                .bind(&category_name)
+                                                                .bind(parent_id)
+                                                                .bind(&emoji)
+                                                                .fetch_one(&mut *tx)
+                                                                .await;
+
+                                                                match insert_result {
+                                                                    Ok(new_id) => {
+                                                                        match tx.commit().await {
+                                                                            Ok(_) => {
+                                                                                if let Some(app) = source_app {
+                                                                                    println!("✅ Created new category: {} / {} {} (ID: {})", app, emoji, category_name, new_id);
+                                                                                } else {
+                                                                                    println!("✅ Created new category: {} {} (ID: {})", emoji, category_name, new_id);
+                                                                                }
+                                                                                new_id
+                                                                            }
+                                                                            Err(e) => {
+                                                                                println!("⚠️  Failed to commit category creation: {}", e);
+                                                                                log::error!("Failed to commit category creation: {}", e);
+                                                                                -1
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        let _ = tx.rollback().await;
+                                                                        println!("⚠️  Failed to insert category: {}", e);
+                                                                        log::error!("Failed to insert category: {}", e);
+                                                                        -1
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                let _ = tx.rollback().await;
+                                                                println!("⚠️  Failed to check for category in transaction: {}", e);
+                                                                log::error!("Failed to check for category in transaction: {}", e);
+                                                                -1
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        println!("⚠️  Failed to begin transaction: {}", e);
+                                                        log::error!("Failed to begin transaction: {}", e);
+                                                        -1
+                                                    }
                                                 }
-                                                new_id
                                             }
                                             Err(e) => {
-                                                println!("⚠️  Failed to create category: {}", e);
-                                                log::error!("Failed to create category: {}", e);
-                                                -1 // Invalid ID, will skip assignment
+                                                println!("⚠️  Failed to get main database pool: {}", e);
+                                                log::error!("Failed to get main database pool: {}", e);
+                                                -1
                                             }
                                         }
                                     };
@@ -1124,18 +1033,18 @@ async fn process_batch(
                                 }
                             }
                         }
-                            Err(e) => {
-                                println!(
-                                    "⚠️  Failed to auto-categorize snippet {}: {}",
-                                    job.snippet_id,
-                                    e
-                                );
-                                log::warn!(
-                                    "Failed to auto-categorize snippet {}: {}",
-                                    job.snippet_id,
-                                    e
-                                );
-                            }
+                        Err(e) => {
+                            println!(
+                                "⚠️  Failed to auto-categorize snippet {}: {}",
+                                job.snippet_id,
+                                e
+                            );
+                            log::warn!(
+                                "Failed to auto-categorize snippet {}: {}",
+                                job.snippet_id,
+                                e
+                            );
+                        }
                         }
                     }
                 }
