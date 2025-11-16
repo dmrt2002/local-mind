@@ -219,7 +219,66 @@ Click result → Auto-navigate to Home tab → Category expands → Snippet disp
 
 ---
 
-### 4. Viewing Analytics & Insights
+### 4. Using Spotlight Search
+
+#### Flow Diagram
+
+```text
+User presses Ctrl+Space (or Alt+Space) → Spotlight overlay appears →
+Type search query → Results appear instantly → Navigate with arrows →
+Select result (Enter) → Content copied to clipboard → Spotlight closes
+```
+
+#### Detailed Steps
+
+1. **Open Spotlight (Ctrl+Space on macOS, Alt+Space on others)**
+   - System-wide shortcut works from any application
+   - Spotlight overlay appears centered on screen
+   - Dark semi-transparent backdrop with search box
+   - Input field is auto-focused
+
+2. **Type Search Query:**
+   - Start typing immediately (no need to click)
+   - Results appear as you type (120ms debounce)
+   - Shows up to 8 most relevant results
+   - Combines keyword and semantic search
+
+3. **Navigate Results:**
+   - Use ↑↓ arrow keys to navigate
+   - Home/End keys jump to first/last result
+   - Selected result is highlighted
+   - Results show snippet preview, type icon, and match indicator
+
+4. **Select Result:**
+   - **Enter**: Copy content to clipboard and close Spotlight
+   - **Cmd/Ctrl + Enter**: Open result in main app window
+   - **Click**: Single-click copies, double-click opens in app
+   - **Cmd/Ctrl + C**: Copy when result is selected
+
+5. **Close Spotlight:**
+   - **ESC key**: Close without selecting
+   - **Click outside**: Click on dark backdrop to close
+   - Window hides instantly
+
+#### Current Experience
+
+- ✅ **Strengths:**
+  - Instant access from anywhere (system-wide)
+  - Fast, responsive search (debounced input)
+  - Minimal, distraction-free UI
+  - Keyboard-driven workflow
+  - Works without opening main app
+  - Combines keyword and semantic search
+  - Visual result indicators (type icons, match types)
+- ⚠️ **Remaining Limitations:**
+  - Limited to 8 results (by design for minimal UI)
+  - No search history
+  - No result preview/expansion
+  - Can't edit from spotlight (must open in main app)
+
+---
+
+### 5. Viewing Analytics & Insights
 
 #### Flow Diagram
 
@@ -277,7 +336,7 @@ View statistics dashboard → Charts display → Performance insights shown
 
 ---
 
-### 5. Using Command Palette
+### 6. Using Command Palette
 
 #### Flow Diagram
 
@@ -857,6 +916,26 @@ Toggle options → Changes saved automatically → View statistics
   - CPU percentage monitoring
   - Auto-refresh every 2 seconds
   - Virtual memory display
+
+#### 17. Spotlight Search
+
+- **Status:** ✅ Fully Implemented (NEW!)
+- **Trigger:** Ctrl+Space (macOS) / Alt+Space (Windows/Linux)
+- **Capabilities:**
+  - System-wide quick search overlay
+  - Instant keyword and semantic search
+  - Keyboard-driven navigation (arrow keys, Enter, ESC)
+  - Copy to clipboard on selection
+  - Open in main app (Cmd/Ctrl + Enter)
+  - Minimal, distraction-free UI
+  - Centered overlay with backdrop blur
+  - Click outside or ESC to close
+  - Shows up to 8 most relevant results
+  - Visual type indicators and match types
+- **Limitations:**
+  - Limited to 8 results (by design)
+  - No search history
+  - Can't edit from spotlight
 
 ---
 

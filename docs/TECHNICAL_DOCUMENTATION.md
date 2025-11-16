@@ -89,6 +89,25 @@ LocalMind uses a **tab-based navigation** interface with three main sections:
 │  - Duplicate Management (scan, merge, delete)                      │
 │  - Storage statistics                                              │
 │  - Performance metrics (RAM, CPU)                                  │
+│                                                                     │
+│  SPOTLIGHT WINDOW (Ctrl+Space / Alt+Space):                       │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  [Dark Backdrop Overlay - Full Screen]                      │ │
+│  │                                                               │ │
+│  │              ┌─────────────────────────────┐                 │ │
+│  │              │  🔍 Search...               │                 │ │
+│  │              ├─────────────────────────────┤                 │ │
+│  │              │  📄 Result 1                │                 │ │
+│  │              │  📄 Result 2                │                 │ │
+│  │              │  📄 Result 3                │                 │ │
+│  │              │  ... (up to 8 results)      │                 │ │
+│  │              └─────────────────────────────┘                 │ │
+│  │                                                               │ │
+│  │  - System-wide overlay (works from any app)                  │ │
+│  │  - Instant keyword + semantic search                         │ │
+│  │  - Keyboard-driven (arrows, Enter, ESC)                      │ │
+│  │  - Copy to clipboard on selection                            │ │
+│  └─────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -100,6 +119,7 @@ LocalMind uses a **tab-based navigation** interface with three main sections:
 - **Command Palette (Ctrl+K)**: Fuzzy search for all actions and commands
 - **Smart Suggestions**: AI-powered recommendations panel in Home tab
 - **Monitoring Settings**: Terminal and screenshot monitoring configuration
+- **Spotlight Search (Ctrl+Space/Alt+Space)**: System-wide quick search overlay
 
 ### Content Types
 
@@ -584,7 +604,242 @@ UI Tree Structure:
 
 ---
 
-### Flow 3: AI Q&A (Ask AI)
+### Flow 3: Spotlight Search (Ctrl+Space / Alt+Space)
+
+#### User Action
+1. User presses `Ctrl+Space` (macOS) or `Alt+Space` (Windows/Linux)
+2. Spotlight overlay appears centered on screen
+3. User types search query
+4. Results appear instantly
+5. User selects result (Enter) or closes (ESC)
+
+#### Technical Flow
+
+```
+┌─────────┐     ┌──────────────┐     ┌──────────────────┐
+│ User    │     │  Global      │     │  Spotlight       │
+│ Shortcut│────►│  Shortcut    │────►│  Window         │
+│ Press   │     │  Handler     │     │  (Tauri)         │
+└─────────┘     └──────────────┘     └──────────────────┘
+                                              │
+                                              ▼
+                                    ┌──────────────────┐
+                                    │  React Component  │
+                                    │  SpotlightSearch  │
+                                    └──────────────────┘
+                                              │
+                                              ▼
+                                    ┌──────────────────┐
+                                    │  Search Query   │
+                                    │  (120ms debounce)│
+                                    └──────────────────┘
+                                              │
+                                              ▼
+                                    ┌──────────────────┐
+                                    │  Parallel Search │
+                                    │  (same as Flow 2)│
+                                    └──────────────────┘
+                                              │
+                                              ▼
+                                    ┌──────────────────┐
+                                    │  Display Results │
+                                    │  (max 8 results) │
+                                    └──────────────────┘
+                                              │
+                                              ▼
+                                    ┌──────────────────┐
+                                    │  User Selection  │
+                                    │  - Copy to clip  │
+                                    │  - Open in app    │
+                                    │  - Close (ESC)    │
+                                    └──────────────────┘
+```
+
+**Step-by-Step Implementation:**
+
+1. **Global Shortcut Registration** (`src-tauri/src/shortcuts.rs`)
+   ```rust
+   // Spotlight shortcut registered at app startup
+   if settings.spotlight_enabled {
+       manager.register(&settings.spotlight_shortcut, {
+           let app = app.clone();
+           move || {
+               handle_spotlight_shortcut(app.clone())?;
+               Ok(())
+           }
+       })?;
+   }
+   ```
+
+2. **Window Management** (`src-tauri/src/shortcuts.rs`)
+   ```rust
+   fn handle_spotlight_shortcut(app: AppHandle) -> Result<()> {
+       let spotlight_window = app.get_window("spotlight")
+           .ok_or_else(|| anyhow!("Spotlight window not found"))?;
+       
+       if spotlight_window.is_visible()? {
+           // Toggle: hide if visible
+           spotlight_window.hide()?;
+       } else {
+           // Show and focus
+           spotlight_window.show()?;
+           spotlight_window.set_focus()?;
+           
+           // Emit event to focus input
+           spotlight_window.emit("spotlight-focus", ())?;
+       }
+       Ok(())
+   }
+   ```
+
+3. **Window Configuration** (`src-tauri/src/main.rs`)
+   ```rust
+   // Spotlight window created at startup (hidden)
+   let spotlight = WindowBuilder::new(
+       &app,
+       "spotlight",
+       WindowUrl::App("spotlight.html".into())
+   )
+   .title("Spotlight")
+   .transparent(true)  // Enable backdrop blur
+   .decorations(false) // Borderless
+   .always_on_top(true)
+   .visible(false)     // Hidden until shortcut pressed
+   .build()?;
+   ```
+
+4. **React Component** (`src/components/SpotlightSearch.tsx`)
+   ```typescript
+   export default function SpotlightSearch() {
+     const [query, setQuery] = useState("");
+     const [results, setResults] = useState<SearchResult[]>([]);
+     const inputRef = useRef<HTMLInputElement>(null);
+     
+     // Auto-focus on mount
+     useEffect(() => {
+       inputRef.current?.focus();
+     }, []);
+     
+     // Listen for focus event from backend
+     useEffect(() => {
+       getCurrentWindowInstance().then(window => {
+         window.listen("spotlight-focus", () => {
+           inputRef.current?.focus();
+           setQuery("");
+           setResults([]);
+         });
+       });
+     }, []);
+     
+     // Search with debounce
+     useEffect(() => {
+       const timer = setTimeout(() => {
+         if (debouncedQuery.trim()) {
+           invoke("search", { query: debouncedQuery })
+             .then((results: SearchResults) => {
+               // Limit to 8 results for minimal UI
+               setResults(results.combined.slice(0, 8));
+             });
+         }
+       }, 120);
+       return () => clearTimeout(timer);
+     }, [debouncedQuery]);
+   }
+   ```
+
+5. **Dynamic Import Pattern** (`src/components/SpotlightSearch.tsx`)
+   ```typescript
+   // Use dynamic import to avoid module loading errors
+   async function getCurrentWindowInstance() {
+     const windowModule = await import("@tauri-apps/api/window");
+     return windowModule.getCurrent();
+   }
+   ```
+   
+   **Why Dynamic Import?**
+   - Tauri APIs may not be immediately available
+   - Prevents `SyntaxError: Importing binding name not found`
+   - More robust error handling
+
+6. **Styling** (`src/components/SpotlightSearch.css`)
+   ```css
+   .spotlight-container {
+     position: fixed;
+     top: 0; left: 0; right: 0; bottom: 0;
+     z-index: 10000;
+     background: rgba(0, 0, 0, 0.4);
+     pointer-events: all;
+   }
+   
+   .spotlight-window {
+     position: fixed;
+     top: 50%; left: 50%;
+     transform: translate(-50%, -50%);
+     width: 550px;
+     background: rgba(255, 255, 255, 0.95);
+     backdrop-filter: blur(20px);
+     border-radius: 12px;
+     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+   }
+   ```
+
+7. **Event Handling**
+   ```typescript
+   // Backdrop click to close
+   const handleBackdropClick = async (e: React.MouseEvent) => {
+     if (e.target === e.currentTarget) {
+       const window = await getCurrentWindowInstance();
+       window.hide();
+     }
+   };
+   
+   // ESC key to close
+   const handleKeyDown = async (e: React.KeyboardEvent) => {
+     if (e.key === "Escape") {
+       e.preventDefault();
+       const window = await getCurrentWindowInstance();
+       window.hide();
+     }
+   };
+   
+   // Result selection
+   const handleSelectResult = async (result: SearchResult, openInApp: boolean) => {
+     if (openInApp) {
+       // Open in main app window
+       await invoke("show_main_window");
+       await invoke("navigate_to_snippet", { id: result.id });
+     } else {
+       // Copy to clipboard
+       await writeText(result.content);
+     }
+     const window = await getCurrentWindowInstance();
+     window.hide();
+   };
+   ```
+
+#### Timing Breakdown
+- Window show: <50ms (window already created)
+- Input focus: <10ms
+- Search debounce: 120ms
+- Keyword results: <100ms
+- Semantic results: 1-2 seconds (if model loaded)
+- **User sees:** Instant keyword results, semantic results appear shortly after
+
+#### Key Differences from Main Search Window
+
+| Feature | Main Search Window | Spotlight |
+|---------|-------------------|-----------|
+| **Window Type** | Regular Tauri window | Always-on-top overlay |
+| **Position** | User-controlled | Fixed center |
+| **Results Limit** | Unlimited | 8 results max |
+| **Debounce** | 300ms | 120ms (faster) |
+| **UI Complexity** | Full interface | Minimal overlay |
+| **Access** | Requires app open | System-wide shortcut |
+| **Transparency** | No | Yes (backdrop blur) |
+
+---
+
+### Flow 4: AI Q&A (Ask AI)
 
 #### User Action
 1. User searches for snippets
@@ -1001,7 +1256,213 @@ pub struct AdaptiveScheduler {
 }
 ```
 
-### 6. Monitoring Systems
+### 6. Spotlight Search System
+
+**Purpose:** System-wide quick search overlay for instant snippet access
+
+**Files:**
+- `src/components/SpotlightSearch.tsx` - Main React component
+- `src/components/SpotlightSearch.css` - Styling (macOS Spotlight-inspired)
+- `src/spotlight.tsx` - Entry point for spotlight window
+- `spotlight.html` - HTML template
+- `src-tauri/src/shortcuts.rs` - Global shortcut handler
+
+**Architecture:**
+
+```rust
+// Window Creation (main.rs)
+let spotlight = WindowBuilder::new(
+    &app,
+    "spotlight",
+    WindowUrl::App("spotlight.html".into())
+)
+.transparent(true)      // Enable backdrop blur
+.decorations(false)     // Borderless window
+.always_on_top(true)    // Always visible
+.visible(false)         // Hidden until shortcut
+.build()?;
+
+// Shortcut Handler (shortcuts.rs)
+fn handle_spotlight_shortcut(app: AppHandle) -> Result<()> {
+    let window = app.get_window("spotlight")?;
+    
+    if window.is_visible()? {
+        window.hide()?;
+    } else {
+        window.show()?;
+        window.set_focus()?;
+        window.emit("spotlight-focus", ())?;
+    }
+    Ok(())
+}
+```
+
+**React Component Structure:**
+
+```typescript
+// SpotlightSearch.tsx
+export default function SpotlightSearch() {
+  // State
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  
+  // Refs
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  
+  // Effects
+  useEffect(() => {
+    // Auto-focus input
+    inputRef.current?.focus();
+  }, []);
+  
+  useEffect(() => {
+    // Listen for focus event from backend
+    getCurrentWindowInstance().then(window => {
+      window.listen("spotlight-focus", () => {
+        inputRef.current?.focus();
+        setQuery("");
+        setResults([]);
+      });
+    });
+  }, []);
+  
+  useEffect(() => {
+    // Debounced search (120ms)
+    const timer = setTimeout(() => {
+      if (query.trim()) {
+        invoke("search", { query })
+          .then((results: SearchResults) => {
+            setResults(results.combined.slice(0, 8));
+          });
+      }
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [query]);
+  
+  // Event handlers
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // ESC: Close
+    if (e.key === "Escape") {
+      getCurrentWindowInstance().then(w => w.hide());
+      return;
+    }
+    
+    // Arrow keys: Navigate
+    if (e.key === "ArrowDown") {
+      setSelectedIndex(prev => Math.min(prev + 1, results.length - 1));
+    }
+    if (e.key === "ArrowUp") {
+      setSelectedIndex(prev => Math.max(prev - 1, 0));
+    }
+    
+    // Enter: Select
+    if (e.key === "Enter" && results[selectedIndex]) {
+      handleSelectResult(results[selectedIndex], e.metaKey || e.ctrlKey);
+    }
+  };
+  
+  const handleSelectResult = async (result: SearchResult, openInApp: boolean) => {
+    if (openInApp) {
+      await invoke("show_main_window");
+      await invoke("navigate_to_snippet", { id: result.id });
+    } else {
+      await writeText(result.content); // Copy to clipboard
+    }
+    getCurrentWindowInstance().then(w => w.hide());
+  };
+}
+```
+
+**Styling Architecture:**
+
+```css
+/* Container: Full-screen backdrop */
+.spotlight-container {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.4);
+  pointer-events: all;
+}
+
+/* Window: Centered search box */
+.spotlight-window {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 550px;
+  max-width: 90vw;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  animation: spotlight-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes spotlight-appear {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) translateY(0);
+  }
+}
+```
+
+**Settings Integration:**
+
+```rust
+// settings.rs
+pub struct Settings {
+    pub spotlight_enabled: bool,
+    pub spotlight_shortcut: String, // "Ctrl+Space" or "Alt+Space"
+}
+
+// Database migration
+ALTER TABLE settings ADD COLUMN spotlight_enabled BOOLEAN DEFAULT 1;
+ALTER TABLE settings ADD COLUMN spotlight_shortcut TEXT DEFAULT 'Ctrl+Space';
+```
+
+**Performance Characteristics:**
+
+| Operation | CPU | Memory | Latency |
+|-----------|-----|--------|---------|
+| Window show | <1% | <1MB | <50ms |
+| Input focus | <1% | <1KB | <10ms |
+| Search debounce | N/A | N/A | 120ms |
+| Keyword search | <1% | <1MB | <100ms |
+| Semantic search | 40-80% | ~86MB | 1-2s |
+| Result display | <1% | <1KB | <10ms |
+
+**Key Design Decisions:**
+
+1. **Window Reuse**: Window created once at startup, reused on each shortcut press (faster than creating new window)
+2. **Dynamic Imports**: Tauri APIs loaded dynamically to prevent module errors
+3. **Result Limit**: Maximum 8 results keeps UI minimal and fast
+4. **Fast Debounce**: 120ms (vs 300ms in main search) for more responsive feel
+5. **Backdrop Blur**: macOS-style visual effect using CSS `backdrop-filter`
+6. **Fixed Centering**: `position: fixed` with `transform: translate(-50%, -50%)` ensures perfect centering
+
+**Error Handling:**
+
+```typescript
+// All Tauri API calls wrapped in try-catch
+try {
+  const window = await getCurrentWindowInstance();
+  await window.hide();
+} catch (error) {
+  console.warn("[SpotlightSearch] Failed to hide window:", error);
+  // Graceful fallback - window may already be hidden
+}
+```
+
+**See Also:** [Spotlight Guide](features/SPOTLIGHT_GUIDE.md) for complete user documentation.
+
+### 7. Monitoring Systems
 
 **Purpose:** Automatically capture and index terminal commands and screenshots
 
@@ -1276,7 +1737,7 @@ Alt+Shift+C Pressed
 ```
 User Types Query
     │
-    ├─► Debounce (300ms wait)
+    ├─► Debounce (300ms wait for main search, 120ms for spotlight)
     │
     └─► Parallel Execution
         │
@@ -1305,6 +1766,53 @@ User Types Query
                       │
                       ▼
             Return to UI (<2s total for semantic)
+                      │
+                      ├─► Main Search: All results
+                      │
+                      └─► Spotlight: Limited to 8 results
+```
+
+### Spotlight Search Flow
+
+```
+User Presses Ctrl+Space / Alt+Space
+    │
+    ├─► Global Shortcut Handler
+    │       │
+    │       ├─► Get Spotlight Window (already created)
+    │       │
+    │       ├─► Show Window (<50ms)
+    │       │
+    │       ├─► Set Focus (<10ms)
+    │       │
+    │       └─► Emit "spotlight-focus" Event
+    │
+    └─► React Component
+            │
+            ├─► Auto-focus Input (<10ms)
+            │
+            ├─► Listen for "spotlight-focus" Event
+            │
+            └─► User Types Query
+                    │
+                    ├─► Debounce (120ms)
+                    │
+                    └─► Parallel Search (same as main search)
+                            │
+                            ▼
+                    Display Results (max 8)
+                            │
+                            ├─► User Navigates (Arrow Keys)
+                            │
+                            ├─► User Selects (Enter)
+                            │       │
+                            │       ├─► Copy to Clipboard
+                            │       │
+                            │       └─► Hide Window
+                            │
+                            └─► User Closes (ESC or Backdrop Click)
+                                    │
+                                    └─► Hide Window
 ```
 
 ### Complete AI Q&A Flow
@@ -1645,3 +2153,4 @@ fn bench_fts5_search(c: &mut Criterion) {
 - Category filtering: categories show only directly assigned snippets (no duplicates)
 - LLM model updated to Qwen2.5-1.5B-Instruct-Q3_K_M
 - Parent categories appear in content type filters if they have descendants with that type
+- Spotlight Search: System-wide quick search overlay (Ctrl+Space / Alt+Space)

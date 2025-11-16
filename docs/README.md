@@ -21,6 +21,7 @@ Welcome to the LocalMind documentation! This directory contains all project docu
 - **SEARCH_FEATURES.md** - Search functionality overview
 - **SEARCH_TECHNIQUES.md** - Advanced search techniques
 - **MONITORING_GUIDE.md** - Terminal and screenshot monitoring guide
+- **SPOTLIGHT_GUIDE.md** - Spotlight quick search feature guide
 
 ### `/archive` - Historical Documentation
 Contains outdated status reports and implementation notes for reference.

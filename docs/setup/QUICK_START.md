@@ -10,6 +10,11 @@
 - **Open Search Window**: `Option + Shift + F`
   - Opens the search interface to find saved snippets
 
+- **Spotlight Search**: `Ctrl + Space`
+  - Quick search overlay (macOS Spotlight-style)
+  - Search snippets, commands, and screenshots instantly
+  - Press ESC or click outside to close
+
 - **Close Search Window**: Press `Escape` when search window is open
 
 - **Terminal Command Picker**: `Ctrl + R` (in terminal)
@@ -20,6 +25,9 @@
 ### Windows/Linux
 - **Save Snippet**: `Alt + Shift + C`
 - **Open Search**: `Alt + Shift + F`
+- **Spotlight Search**: `Alt + Space`
+  - Quick search overlay for instant access
+  - Press ESC or click outside to close
 - **Close**: `Escape`
 - **Terminal Command Picker**: `Ctrl + R` (in terminal)
 
@@ -53,6 +61,14 @@ You'll see structured logs like:
 4. The text is now saved in your local database
 
 ### Search Snippets
+
+**Option 1: Quick Spotlight Search**
+1. Press **`Ctrl + Space`** (macOS) or **`Alt + Space`** (Windows/Linux)
+2. Type your search query
+3. Results appear instantly as you type
+4. Press **Enter** to copy selected result, or **ESC** to close
+
+**Option 2: Full Search Window**
 1. Press **`Option + Shift + F`** to open search
 2. Type your search query
 3. Results appear instantly (keyword search)
